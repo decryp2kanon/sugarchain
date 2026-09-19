@@ -3629,12 +3629,20 @@ bool PeerLogicValidation::SendMessages(CNode* pto, std::atomic<bool>& interruptM
             const unsigned int BLOCK_DOWNLOAD_BATCH_LIMIT =
                 std::max(1024u, static_cast<unsigned int>(MAX_BLOCKS_IN_TRANSIT_PER_PEER / 16));
 
-            unsigned int nBlocksToRequest =
-                MAX_BLOCKS_IN_TRANSIT_PER_PEER - state.nBlocksInFlight;
+            unsigned int nBlocksToRequest = 0;
 
-            nBlocksToRequest = std::min(nBlocksToRequest, BLOCK_DOWNLOAD_BATCH_LIMIT);
+            // Limit total accumulated in-flight blocks for this peer to one batch.
+            // This prevents repeated scheduling rounds from letting one peer
+            // monopolize the available block requests.
+            if (state.nBlocksInFlight < BLOCK_DOWNLOAD_BATCH_LIMIT) {
+                nBlocksToRequest =
+                    BLOCK_DOWNLOAD_BATCH_LIMIT - state.nBlocksInFlight;
+            }
 
-            FindNextBlocksToDownload(pto->GetId(), nBlocksToRequest, vToDownload, staller, consensusParams);
+            if (nBlocksToRequest > 0) {
+                FindNextBlocksToDownload(pto->GetId(), nBlocksToRequest,
+                                         vToDownload, staller, consensusParams);
+            }
             for (const CBlockIndex *pindex : vToDownload) {
                 uint32_t nFetchFlags = GetFetchFlags(pto);
                 vGetData.push_back(CInv(MSG_BLOCK | nFetchFlags, pindex->GetBlockHash()));
