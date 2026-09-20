@@ -44,9 +44,6 @@ static constexpr int64_t EXTRA_PEER_CHECK_INTERVAL = 3; // seconds // FIXME.SUGA
 // (30 / 2) = 15 
 static constexpr int64_t MINIMUM_CONNECT_TIME = 15; // seconds // FIXME.SUGAR
 
-class CBlockHeader;
-class CChainParams;
-
 class PeerLogicValidation : public CValidationInterface, public NetEventsInterface {
 private:
     CConnman* const connman;
@@ -89,10 +86,6 @@ struct CNodeStateStats {
 };
 
 /** Get statistics from node state */
-/** Process a headers message. Exposed so the test suite can exercise the exact
- * HEADERS -> GETHEADERS continuation path used during IBD. */
-bool ProcessHeadersMessage(CNode *pfrom, CConnman *connman, const std::vector<CBlockHeader>& headers, const CChainParams& chainparams, bool punish_duplicate_invalid);
-
 bool GetNodeStateStats(NodeId nodeid, CNodeStateStats &stats);
 /** Increase a node's misbehavior score. */
 void Misbehaving(NodeId nodeid, int howmuch);
