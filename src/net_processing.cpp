@@ -3625,24 +3625,23 @@ bool PeerLogicValidation::SendMessages(CNode* pto, std::atomic<bool>& interruptM
             * block download window.
             */
 
-            // Per-peer block assignment limit per scheduling round, scaled by the global download window.
-            const unsigned int BLOCK_DOWNLOAD_BATCH_LIMIT =
-                std::max(1024u, static_cast<unsigned int>(MAX_BLOCKS_IN_TRANSIT_PER_PEER / 16));
+            // Limit only the amount of NEW work assigned in this scheduling pass.
+            // Do not turn this fairness batch into an accumulated per-peer cap:
+            // repeated passes may continue filling a peer all the way to
+            // MAX_BLOCKS_IN_TRANSIT_PER_PEER.
+            //
+            // Keep the batch deliberately smaller than the download window so
+            // the first peer processed by SendMessages() cannot normally claim
+            // the entire currently available range before other peers are
+            // scheduled.
+            const unsigned int BLOCK_DOWNLOAD_BATCH_LIMIT = 1024;
 
-            unsigned int nBlocksToRequest = 0;
+            const unsigned int nBlocksToRequest =
+                std::min(MAX_BLOCKS_IN_TRANSIT_PER_PEER - state.nBlocksInFlight,
+                         BLOCK_DOWNLOAD_BATCH_LIMIT);
 
-            // Limit total accumulated in-flight blocks for this peer to one batch.
-            // This prevents repeated scheduling rounds from letting one peer
-            // monopolize the available block requests.
-            if (state.nBlocksInFlight < BLOCK_DOWNLOAD_BATCH_LIMIT) {
-                nBlocksToRequest =
-                    BLOCK_DOWNLOAD_BATCH_LIMIT - state.nBlocksInFlight;
-            }
-
-            if (nBlocksToRequest > 0) {
-                FindNextBlocksToDownload(pto->GetId(), nBlocksToRequest,
-                                         vToDownload, staller, consensusParams);
-            }
+            FindNextBlocksToDownload(pto->GetId(), nBlocksToRequest,
+                                     vToDownload, staller, consensusParams);
             for (const CBlockIndex *pindex : vToDownload) {
                 uint32_t nFetchFlags = GetFetchFlags(pto);
                 vGetData.push_back(CInv(MSG_BLOCK | nFetchFlags, pindex->GetBlockHash()));
