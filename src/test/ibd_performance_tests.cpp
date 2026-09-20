@@ -27,7 +27,12 @@
 #include <cstdint>
 #include <vector>
 
-BOOST_FIXTURE_TEST_SUITE(ibd_performance_tests, TestingSetup)
+struct IBDPerformanceTestingSetup : public TestingSetup
+{
+    IBDPerformanceTestingSetup() : TestingSetup(CBaseChainParams::REGTEST) {}
+};
+
+BOOST_FIXTURE_TEST_SUITE(ibd_performance_tests, IBDPerformanceTestingSetup)
 
 BOOST_AUTO_TEST_CASE(header_batch_processing_benchmark)
 {
