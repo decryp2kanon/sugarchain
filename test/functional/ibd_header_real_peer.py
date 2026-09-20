@@ -25,8 +25,7 @@ import time
 import urllib.request
 
 
-def rpc(url, user, password, method, params=None):
-    payload = json.dumps({"jsonrpc": "1.0", "id": "ibd-header-bench",
+# Small JSON-RPC helper used to read benchmark-node state and stop it cleanly.\n# This talks only to the temporary benchmark node, not to the full-sync peer.\ndef rpc(url, user, password, method, params=None):\n    payload = json.dumps({"jsonrpc": "1.0", "id": "ibd-header-bench",
                           "method": method, "params": params or []}).encode()
     req = urllib.request.Request(url, data=payload,
                                  headers={"Content-Type": "application/json"})
@@ -41,8 +40,7 @@ def rpc(url, user, password, method, params=None):
 
 
 def main():
-    p = argparse.ArgumentParser(description="Benchmark real IBD header download from one full-sync peer")
-    p.add_argument("--peer", required=True, help="full-sync P2P peer as HOST:PORT")
+    p = argparse.ArgumentParser(description="Benchmark real IBD header download from one full-sync peer")\n    # Required inputs:\n    #   --peer    = P2P address of an already fully-synced SugarChain node.\n    #               Example: 127.0.0.1:34230\n    #   --datadir = EMPTY/dedicated directory for the new benchmark IBD node.\n    #               Do NOT point this at the full-sync peer's existing datadir.\n    p.add_argument("--peer", required=True, help="full-sync P2P peer as HOST:PORT")
     p.add_argument("--datadir", required=True, help="dedicated datadir for the benchmark IBD node")
     p.add_argument("--daemon", default="./src/sugarchaind", help="path to sugarchaind")
     p.add_argument("--rpcport", type=int, default=18443, help="benchmark node RPC port")
@@ -56,13 +54,11 @@ def main():
                    help="allow a non-empty datadir; never deletes it")
     args = p.parse_args()
 
-    datadir = os.path.abspath(os.path.expanduser(args.datadir))
-    if os.path.exists(datadir) and os.listdir(datadir) and not args.allow_existing_datadir:
+    # Safety guard: by default we refuse a non-empty datadir.  The benchmark\n    # starts a fresh node and must never accidentally reuse/delete valuable\n    # chain data.  --allow-existing-datadir is an explicit opt-in only.\n    datadir = os.path.abspath(os.path.expanduser(args.datadir))\n    if os.path.exists(datadir) and os.listdir(datadir) and not args.allow_existing_datadir:
         p.error("--datadir is not empty; use a dedicated empty directory or explicitly pass --allow-existing-datadir")
     os.makedirs(datadir, exist_ok=True)
 
-    cmd = [
-        args.daemon,
+    # Launch a dedicated benchmark daemon and force its outbound connection to\n    # --peer.  DNS discovery is disabled so measured header progress comes from\n    # the peer supplied by the user rather than random public peers.\n    cmd = [\n        args.daemon,
         "-datadir=" + datadir,
         "-server=1",
         "-listen=1",
@@ -84,8 +80,7 @@ def main():
     url = "http://127.0.0.1:%d/" % args.rpcport
 
     try:
-        deadline = time.time() + args.startup_timeout
-        while True:
+        # Phase 1: wait for the benchmark daemon's RPC server to become ready.\n        deadline = time.time() + args.startup_timeout\n        while True:
             if proc.poll() is not None:
                 raise RuntimeError("benchmark node exited with status %d" % proc.returncode)
             try:
@@ -96,8 +91,7 @@ def main():
                     raise RuntimeError("RPC did not become ready within startup timeout")
                 time.sleep(0.2)
 
-        # Wait until the configured peer is actually connected.
-        deadline = time.time() + args.startup_timeout
+        # Phase 2: wait until the configured full-sync P2P peer is connected.\n        # Measurement does not start before this succeeds.\n        deadline = time.time() + args.startup_timeout
         peer_info = []
         while time.time() < deadline:
             peer_info = rpc(url, args.rpcuser, args.rpcpassword, "getpeerinfo")
@@ -107,8 +101,7 @@ def main():
         if not peer_info:
             raise RuntimeError("full-sync peer did not connect")
 
-        info = rpc(url, args.rpcuser, args.rpcpassword, "getblockchaininfo")
-        start_headers = int(info["headers"])
+        # Capture the starting point.  'headers' is the best accepted header\n        # height; 'blocks' is the downloaded/processed block height.\n        info = rpc(url, args.rpcuser, args.rpcpassword, "getblockchaininfo")\n        start_headers = int(info["headers"])
         start_blocks = int(info["blocks"])
         max_headers = start_headers
         samples = [(time.monotonic(), start_headers, start_blocks)]
@@ -116,9 +109,7 @@ def main():
         print("Connected. start headers=%d blocks=%d" % (start_headers, start_blocks))
         start = time.monotonic()
 
-        while True:
-            now = time.monotonic()
-            info = rpc(url, args.rpcuser, args.rpcpassword, "getblockchaininfo")
+        # Main measurement loop.  Poll RPC at --sample intervals and measure\n        # actual header-height growth while the daemon performs real P2P sync.\n        while True:\n            now = time.monotonic()\n            info = rpc(url, args.rpcuser, args.rpcpassword, "getblockchaininfo")
             headers = int(info["headers"])
             blocks = int(info["blocks"])
             max_headers = max(max_headers, headers)
@@ -130,8 +121,7 @@ def main():
             print("\rheaders=%d blocks=%d lead=%d gained=%d rate=%.1f headers/s" %
                   (headers, blocks, headers - blocks, gained, rate), end="", flush=True)
 
-            if args.duration > 0 and elapsed >= args.duration:
-                break
+            # --duration=N: stop after N seconds.\n            # --duration=0: keep going until our header height reaches the\n            # connected peer's reported synced_headers value.\n            if args.duration > 0 and elapsed >= args.duration:\n                break
             if args.duration == 0:
                 peers = rpc(url, args.rpcuser, args.rpcpassword, "getpeerinfo")
                 peer_tip = max([int(x.get("synced_headers", -1)) for x in peers] + [-1])
@@ -144,8 +134,7 @@ def main():
         elapsed = end - start
         gained = max_headers - start_headers
         rate = gained / elapsed if elapsed > 0 else 0.0
-        batches = gained / 2000.0
-        batch_rate = batches / elapsed if elapsed > 0 else 0.0
+        # Convert total header gain into equivalent full 2000-header batches.\n        # This makes the result directly comparable with the IBD target of\n        # multiple complete HEADERS responses per second.\n        batches = gained / 2000.0\n        batch_rate = batches / elapsed if elapsed > 0 else 0.0
 
         final_info = rpc(url, args.rpcuser, args.rpcpassword, "getblockchaininfo")
         print("IBD REAL-PEER HEADER BENCHMARK")
@@ -156,8 +145,7 @@ def main():
         print("  headers/s: %.1f" % rate)
         print("  equivalent 2000-header batches/s: %.3f" % batch_rate)
         return 0 if gained > 0 else 2
-    finally:
-        try:
+    finally:\n        # Always stop the benchmark daemon.  Try RPC first, then SIGTERM, and\n        # finally SIGKILL only if the process refuses to exit.\n        try:
             rpc(url, args.rpcuser, args.rpcpassword, "stop")
         except Exception:
             if proc.poll() is None:
