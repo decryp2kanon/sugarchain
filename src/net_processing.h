@@ -86,6 +86,10 @@ struct CNodeStateStats {
 };
 
 /** Get statistics from node state */
+/** Process a headers message. Exposed so the test suite can exercise the exact
+ * HEADERS -> GETHEADERS continuation path used during IBD. */
+bool ProcessHeadersMessage(CNode *pfrom, CConnman *connman, const std::vector<CBlockHeader>& headers, const CChainParams& chainparams, bool punish_duplicate_invalid);
+
 bool GetNodeStateStats(NodeId nodeid, CNodeStateStats &stats);
 /** Increase a node's misbehavior score. */
 void Misbehaving(NodeId nodeid, int howmuch);
