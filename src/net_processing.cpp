@@ -3637,7 +3637,7 @@ bool PeerLogicValidation::SendMessages(CNode* pto, std::atomic<bool>& interruptM
             const unsigned int BLOCK_DOWNLOAD_BATCH_LIMIT = 1024;
 
             const unsigned int nBlocksToRequest =
-                std::min(MAX_BLOCKS_IN_TRANSIT_PER_PEER - state.nBlocksInFlight,
+                std::min(static_cast<unsigned int>(MAX_BLOCKS_IN_TRANSIT_PER_PEER - state.nBlocksInFlight),
                          BLOCK_DOWNLOAD_BATCH_LIMIT);
 
             FindNextBlocksToDownload(pto->GetId(), nBlocksToRequest,
