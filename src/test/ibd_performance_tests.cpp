@@ -30,20 +30,16 @@
 #include <cstdint>
 #include <vector>
 
-struct IBDPerformanceTestingSetup : public TestingSetup
-{
+// Run these tests on REGTEST so they are deterministic and do not depend on\n// the user's mainnet datadir or on a live network connection.\nstruct IBDPerformanceTestingSetup : public TestingSetup\n{
     IBDPerformanceTestingSetup() : TestingSetup(CBaseChainParams::REGTEST) {}
 };
 
 
-static void QueueHeadersMessage(CNode& peer, const std::vector<CBlockHeader>& headers)
-{
+// Build a real P2P HEADERS message and place it in the mock peer's normal\n// receive queue.  We intentionally enter through PeerLogicValidation::\n// ProcessMessages() later instead of calling the internal static\n// ProcessHeadersMessage() directly.  This keeps production source unchanged.\nstatic void QueueHeadersMessage(CNode& peer, const std::vector<CBlockHeader>& headers)\n{
     const CChainParams& chainparams = Params();
-    CSerializedNetMsg serialized =
-        CNetMsgMaker(PROTOCOL_VERSION).Make(NetMsgType::HEADERS, headers);
+    // Serialize exactly the same HEADERS payload a remote peer would send.\n    CSerializedNetMsg serialized =\n        CNetMsgMaker(PROTOCOL_VERSION).Make(NetMsgType::HEADERS, headers);
 
-    CMessageHeader header(chainparams.MessageStart(),
-                          serialized.command.c_str(),
+    // Construct the 24-byte network message header and checksum so the normal\n    // message parser accepts this as a genuine inbound P2P message.\n    CMessageHeader header(chainparams.MessageStart(),\n                          serialized.command.c_str(),
                           serialized.data.size());
     const uint256 checksum = Hash(serialized.data.begin(), serialized.data.end());
     memcpy(header.pchChecksum, checksum.begin(), CMessageHeader::CHECKSUM_SIZE);
@@ -51,8 +47,7 @@ static void QueueHeadersMessage(CNode& peer, const std::vector<CBlockHeader>& he
     CDataStream header_stream(SER_NETWORK, PROTOCOL_VERSION);
     header_stream << header;
 
-    CNetMessage incoming(chainparams.MessageStart(), SER_NETWORK, PROTOCOL_VERSION);
-    BOOST_REQUIRE_EQUAL(
+    // Feed the serialized bytes through CNetMessage's normal header/data\n    // parsing path.  A failure here means the synthetic wire message itself is\n    // malformed, not that header validation is slow.\n    CNetMessage incoming(chainparams.MessageStart(), SER_NETWORK, PROTOCOL_VERSION);\n    BOOST_REQUIRE_EQUAL(
         incoming.readHeader(reinterpret_cast<const char*>(header_stream.data()),
                             header_stream.size()),
         0);
@@ -62,8 +57,7 @@ static void QueueHeadersMessage(CNode& peer, const std::vector<CBlockHeader>& he
         0);
     BOOST_REQUIRE(incoming.complete());
 
-    LOCK(peer.cs_vProcessMsg);
-    peer.nProcessQueueSize += incoming.vRecv.size() + CMessageHeader::HEADER_SIZE;
+    // Queue the completed message exactly where ProcessMessages() expects an\n    // inbound peer message.  No production function visibility is changed.\n    LOCK(peer.cs_vProcessMsg);\n    peer.nProcessQueueSize += incoming.vRecv.size() + CMessageHeader::HEADER_SIZE;
     peer.vProcessMsg.push_back(std::move(incoming));
 }
 
@@ -71,9 +65,7 @@ BOOST_FIXTURE_TEST_SUITE(ibd_performance_tests, IBDPerformanceTestingSetup)
 
 BOOST_AUTO_TEST_CASE(header_batch_processing_benchmark)
 {
-    static const size_t HEADERS_PER_BATCH = 2000;
-    static const size_t BATCH_COUNT = 10;
-
+    // Inputs for this benchmark.  Increase BATCH_COUNT for a longer run.\n    // 2000 matches the protocol's normal maximum HEADERS response size.\n    static const size_t HEADERS_PER_BATCH = 2000;\n    static const size_t BATCH_COUNT = 10;\n
     const CChainParams& chainparams = Params();
     const Consensus::Params& consensus = chainparams.GetConsensus();
 
@@ -90,8 +82,7 @@ BOOST_AUTO_TEST_CASE(header_batch_processing_benchmark)
         std::vector<CBlockHeader> headers;
         headers.reserve(HEADERS_PER_BATCH);
 
-        for (size_t i = 0; i < HEADERS_PER_BATCH; ++i) {
-            CBlockHeader header;
+        // Generate one continuous synthetic header chain.  Each new header\n        // points to the hash of the previous one, just like a real chain.\n        for (size_t i = 0; i < HEADERS_PER_BATCH; ++i) {\n            CBlockHeader header;
             header.nVersion = previous.nVersion;
             header.hashPrevBlock = previous_hash;
             header.hashMerkleRoot.SetNull();
@@ -107,8 +98,7 @@ BOOST_AUTO_TEST_CASE(header_batch_processing_benchmark)
         CValidationState state;
         const CBlockIndex* pindex_last = nullptr;
 
-        const auto batch_start = std::chrono::steady_clock::now();
-        BOOST_REQUIRE_MESSAGE(
+        // Time only the production header-validation/index-insertion path.\n        // Header construction above is deliberately outside this timer.\n        const auto batch_start = std::chrono::steady_clock::now();\n        BOOST_REQUIRE_MESSAGE(
             ProcessNewBlockHeaders(headers, state, chainparams, &pindex_last),
             "ProcessNewBlockHeaders failed in batch " << batch
                 << ": " << FormatStateMessage(state));
@@ -151,14 +141,12 @@ BOOST_AUTO_TEST_CASE(header_batch_processing_benchmark)
 
 BOOST_AUTO_TEST_CASE(headers_message_requests_next_batch)
 {
-    static const size_t HEADERS_PER_BATCH = MAX_HEADERS_RESULTS;
-
+    // A full HEADERS response is the important boundary: production code\n    // should interpret MAX_HEADERS_RESULTS (normally 2000) as 'peer may have\n    // more' and immediately queue the next GETHEADERS request.\n    static const size_t HEADERS_PER_BATCH = MAX_HEADERS_RESULTS;\n
     const CChainParams& chainparams = Params();
     BOOST_REQUIRE(chainActive.Tip() != nullptr);
     BOOST_REQUIRE(IsInitialBlockDownload());
 
-    SOCKET socket = INVALID_SOCKET;
-    in_addr ipv4_addr;
+    // This is an in-process mock peer: no TCP connection is opened.  The peer\n    // exists only so the real message-processing code has normal CNode state.\n    SOCKET socket = INVALID_SOCKET;\n    in_addr ipv4_addr;
     ipv4_addr.s_addr = 0x0100007f;
     CAddress address(CService(ipv4_addr, 18444), NODE_NETWORK);
     CNode peer(1, NODE_NETWORK, 0, socket, address, 0, 0,
@@ -174,7 +162,7 @@ BOOST_AUTO_TEST_CASE(headers_message_requests_next_batch)
     std::vector<CBlockHeader> headers;
     headers.reserve(HEADERS_PER_BATCH);
 
-    for (size_t i = 0; i < HEADERS_PER_BATCH; ++i) {
+    // Create exactly one full 2000-header response, continuous from genesis.\n    for (size_t i = 0; i < HEADERS_PER_BATCH; ++i) {
         CBlockHeader header;
         header.nVersion = previous.nVersion;
         header.hashPrevBlock = previous_hash;
@@ -187,16 +175,11 @@ BOOST_AUTO_TEST_CASE(headers_message_requests_next_batch)
         previous_hash = header.GetHash();
     }
 
-    QueueHeadersMessage(peer, headers);
-
-    const size_t send_before = peer.vSendMsg.size();
+    // Put the synthetic HEADERS message into the peer's normal receive queue.\n    QueueHeadersMessage(peer, headers);\n\n    // Record the send queue size before processing.  Processing a full 2000\n    // HEADERS message should append exactly one continuation GETHEADERS.\n    const size_t send_before = peer.vSendMsg.size();
     std::atomic<bool> interrupt(false);
-    peerLogic->ProcessMessages(&peer, interrupt);
-    const size_t send_after = peer.vSendMsg.size();
+    // Public production entry point.  Internally this dispatches HEADERS to the\n    // existing static ProcessHeadersMessage() without exposing that function.\n    peerLogic->ProcessMessages(&peer, interrupt);\n    const size_t send_after = peer.vSendMsg.size();
 
-    BOOST_CHECK_EQUAL(send_after, send_before + 1);
-    BOOST_CHECK(mapBlockIndex.count(previous_hash) == 1);
-
+    // Check #1: a full batch caused one outbound continuation request.\n    BOOST_CHECK_EQUAL(send_after, send_before + 1);\n    // Check #2: the final header reached the real block-index processing path.\n    BOOST_CHECK(mapBlockIndex.count(previous_hash) == 1);\n
     bool update_connection_time = false;
     peerLogic->FinalizeNode(peer.GetId(), update_connection_time);
     CConnmanTest::ClearNodes();
