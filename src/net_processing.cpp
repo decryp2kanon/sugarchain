@@ -3232,8 +3232,16 @@ bool PeerLogicValidation::SendMessages(CNode* pto, std::atomic<bool>& interruptM
             pindexBestHeader = chainActive.Tip();
         bool fFetch = state.fPreferredDownload || (nPreferredDownload == 0 && !pto->fClient && !pto->fOneShot); // Download if this is a nice peer, or we have no nice peers and this one might do.
         if (!state.fSyncStarted && !pto->fClient && !fImporting && !fReindex) {
-            // Only actively request headers from a single peer, unless we're close to today.
-            if ((nSyncStarted == 0 && fFetch) || pindexBestHeader->GetBlockTime() > GetAdjustedTime() - 24 * 60 * 60) {
+            // During IBD, keep header synchronization active on every preferred
+            // download peer. SugarChain can process blocks quickly enough to catch
+            // a shallow header horizon, so relying on a single header-sync peer can
+            // leave the block download pipeline temporarily starved. Multiple
+            // preferred peers provide independent header pipelines; duplicate
+            // headers are harmless and the normal header validation path still
+            // applies. Outside IBD, retain the original single-peer behavior.
+            if ((IsInitialBlockDownload() && fFetch) ||
+                (nSyncStarted == 0 && fFetch) ||
+                pindexBestHeader->GetBlockTime() > GetAdjustedTime() - 24 * 60 * 60) {
                 state.fSyncStarted = true;
                 state.nHeadersSyncTimeout = GetTimeMicros() + HEADERS_DOWNLOAD_TIMEOUT_BASE + HEADERS_DOWNLOAD_TIMEOUT_PER_HEADER * (GetAdjustedTime() - pindexBestHeader->GetBlockTime())/(consensusParams.nPowTargetSpacing);
                 nSyncStarted++;
