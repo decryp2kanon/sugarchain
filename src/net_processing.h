@@ -44,6 +44,9 @@ static constexpr int64_t EXTRA_PEER_CHECK_INTERVAL = 3; // seconds // FIXME.SUGA
 // (30 / 2) = 15 
 static constexpr int64_t MINIMUM_CONNECT_TIME = 15; // seconds // FIXME.SUGAR
 
+class CBlockHeader;
+class CChainParams;
+
 class PeerLogicValidation : public CValidationInterface, public NetEventsInterface {
 private:
     CConnman* const connman;
