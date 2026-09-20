@@ -2905,21 +2905,8 @@ bool PeerLogicValidation::ProcessMessages(CNode* pfrom, std::atomic<bool>& inter
         LOCK(pfrom->cs_vProcessMsg);
         if (pfrom->vProcessMsg.empty())
             return false;
-        // During IBD, prioritize queued HEADERS messages over bulk block
-        // traffic. A deep block download pipeline can otherwise leave a
-        // HEADERS response waiting behind many BLOCK messages, starving the
-        // header horizon even though the peer has already replied.
-        auto msg_it = pfrom->vProcessMsg.begin();
-        if (IsInitialBlockDownload()) {
-            for (auto it = pfrom->vProcessMsg.begin(); it != pfrom->vProcessMsg.end(); ++it) {
-                if (it->hdr.GetCommand() == NetMsgType::HEADERS) {
-                    msg_it = it;
-                    break;
-                }
-            }
-        }
-
-        msgs.splice(msgs.begin(), pfrom->vProcessMsg, msg_it);
+        // Just take one message
+        msgs.splice(msgs.begin(), pfrom->vProcessMsg, pfrom->vProcessMsg.begin());
         pfrom->nProcessQueueSize -= msgs.front().vRecv.size() + CMessageHeader::HEADER_SIZE;
         pfrom->fPauseRecv = pfrom->nProcessQueueSize > connman->GetReceiveFloodSize();
         fMoreWork = !pfrom->vProcessMsg.empty();
