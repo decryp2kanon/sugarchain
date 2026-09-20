@@ -3537,6 +3537,23 @@ bool PeerLogicValidation::SendMessages(CNode* pto, std::atomic<bool>& interruptM
 
         // Detect whether we're stalling
         nNow = GetTimeMicros();
+
+        // During IBD, a slow peer holding the block at the front of the
+        // download window can temporarily prevent the window from advancing.
+        // Release one stalled request before the full peer-disconnect timeout
+        // so another peer can request it. MarkBlockAsReceived() is also used
+        // for timed-out requests and keeps all in-flight accounting consistent.
+        static const int64_t BLOCK_STALL_REASSIGN_TIMEOUT = 5;
+        if (IsInitialBlockDownload() &&
+            state.nStallingSince &&
+            state.nStallingSince < nNow - 1000000 * BLOCK_STALL_REASSIGN_TIMEOUT &&
+            !state.vBlocksInFlight.empty()) {
+            const uint256 stalledHash = state.vBlocksInFlight.front().hash;
+            LogPrintf("Reassigning stalled block %s from peer=%d\n",
+                      stalledHash.ToString(), pto->GetId());
+            MarkBlockAsReceived(stalledHash);
+        }
+
         if (state.nStallingSince && state.nStallingSince < nNow - 1000000 * BLOCK_STALLING_TIMEOUT) {
             // Stalling only triggers when the block download window cannot move. During normal steady state,
             // the download window should be much larger than the to-be-downloaded set of blocks, so disconnection
