@@ -13,6 +13,12 @@
  */
 
 #include <chainparams.h>
+#include <hash.h>
+#include <net.h>
+#include <net_processing.h>
+#include <netmessagemaker.h>
+#include <protocol.h>
+#include <streams.h>
 #include <consensus/params.h>
 #include <primitives/block.h>
 #include <test/test_bitcoin.h>
@@ -28,6 +34,38 @@ struct IBDPerformanceTestingSetup : public TestingSetup
 {
     IBDPerformanceTestingSetup() : TestingSetup(CBaseChainParams::REGTEST) {}
 };
+
+
+static void QueueHeadersMessage(CNode& peer, const std::vector<CBlockHeader>& headers)
+{
+    const CChainParams& chainparams = Params();
+    CSerializedNetMsg serialized =
+        CNetMsgMaker(PROTOCOL_VERSION).Make(NetMsgType::HEADERS, headers);
+
+    CMessageHeader header(chainparams.MessageStart(),
+                          serialized.command.c_str(),
+                          serialized.data.size());
+    const uint256 checksum = Hash(serialized.data.begin(), serialized.data.end());
+    memcpy(header.pchChecksum, checksum.begin(), CMessageHeader::CHECKSUM_SIZE);
+
+    CDataStream header_stream(SER_NETWORK, PROTOCOL_VERSION);
+    header_stream << header;
+
+    CNetMessage incoming(chainparams.MessageStart(), SER_NETWORK, PROTOCOL_VERSION);
+    BOOST_REQUIRE_EQUAL(
+        incoming.readHeader(reinterpret_cast<const char*>(header_stream.data()),
+                            header_stream.size()),
+        0);
+    BOOST_REQUIRE_EQUAL(
+        incoming.readData(reinterpret_cast<const char*>(serialized.data.data()),
+                          serialized.data.size()),
+        0);
+    BOOST_REQUIRE(incoming.complete());
+
+    LOCK(peer.cs_vProcessMsg);
+    peer.nProcessQueueSize += incoming.vRecv.size() + CMessageHeader::HEADER_SIZE;
+    peer.vProcessMsg.push_back(std::move(incoming));
+}
 
 BOOST_FIXTURE_TEST_SUITE(ibd_performance_tests, IBDPerformanceTestingSetup)
 
@@ -109,5 +147,59 @@ BOOST_AUTO_TEST_CASE(header_batch_processing_benchmark)
         << batches_per_second << " batches/s");
 }
 
+
+
+BOOST_AUTO_TEST_CASE(headers_message_requests_next_batch)
+{
+    static const size_t HEADERS_PER_BATCH = MAX_HEADERS_RESULTS;
+
+    const CChainParams& chainparams = Params();
+    BOOST_REQUIRE(chainActive.Tip() != nullptr);
+    BOOST_REQUIRE(IsInitialBlockDownload());
+
+    SOCKET socket = INVALID_SOCKET;
+    in_addr ipv4_addr;
+    ipv4_addr.s_addr = 0x0100007f;
+    CAddress address(CService(ipv4_addr, 18444), NODE_NETWORK);
+    CNode peer(1, NODE_NETWORK, 0, socket, address, 0, 0,
+               CAddress(), std::string(), false);
+    peer.SetRecvVersion(PROTOCOL_VERSION);
+    peer.SetSendVersion(PROTOCOL_VERSION);
+
+    CConnmanTest::AddNode(peer);
+    peerLogic->InitializeNode(&peer);
+
+    CBlockHeader previous = chainparams.GenesisBlock().GetBlockHeader();
+    uint256 previous_hash = previous.GetHash();
+    std::vector<CBlockHeader> headers;
+    headers.reserve(HEADERS_PER_BATCH);
+
+    for (size_t i = 0; i < HEADERS_PER_BATCH; ++i) {
+        CBlockHeader header;
+        header.nVersion = previous.nVersion;
+        header.hashPrevBlock = previous_hash;
+        header.hashMerkleRoot.SetNull();
+        header.nTime = previous.nTime + 1;
+        header.nBits = previous.nBits;
+        header.nNonce = static_cast<uint32_t>(i + 1);
+        headers.push_back(header);
+        previous = header;
+        previous_hash = header.GetHash();
+    }
+
+    QueueHeadersMessage(peer, headers);
+
+    const size_t send_before = peer.vSendMsg.size();
+    std::atomic<bool> interrupt(false);
+    peerLogic->ProcessMessages(&peer, interrupt);
+    const size_t send_after = peer.vSendMsg.size();
+
+    BOOST_CHECK_EQUAL(send_after, send_before + 1);
+    BOOST_CHECK(mapBlockIndex.count(previous_hash) == 1);
+
+    bool update_connection_time = false;
+    peerLogic->FinalizeNode(peer.GetId(), update_connection_time);
+    CConnmanTest::ClearNodes();
+}
 
 BOOST_AUTO_TEST_SUITE_END()
