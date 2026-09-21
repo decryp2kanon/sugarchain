@@ -3666,7 +3666,7 @@ bool PeerLogicValidation::SendMessages(CNode* pto, std::atomic<bool>& interruptM
             // the first peer processed by SendMessages() cannot normally claim
             // the entire currently available range before other peers are
             // scheduled.
-            static const unsigned int BLOCK_DOWNLOAD_BATCH_DIVISOR = 256;
+            static const unsigned int BLOCK_DOWNLOAD_BATCH_DIVISOR = 16;
             const unsigned int BLOCK_DOWNLOAD_BATCH_LIMIT =
                 std::max(1u, static_cast<unsigned int>(
                     MAX_BLOCKS_IN_TRANSIT_PER_PEER / BLOCK_DOWNLOAD_BATCH_DIVISOR));
