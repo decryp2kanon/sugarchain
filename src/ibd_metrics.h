@@ -13,7 +13,7 @@
 namespace ibdmetrics {
 
 struct Counters {
-    std::atomic<int64_t> received{0}, pow_calls{0}, pow_hits{0}, pow_misses{0}, pow_us{0};
+    std::atomic<int64_t> received{0}, pow_calls{0}, pow_hits{0}, pow_misses{0}, pow_skipped{0}, pow_us{0};
     std::atomic<int64_t> disk_writes{0}, disk_us{0}, connected{0}, connect_us{0};
     std::atomic<int64_t> next_log_us{0}, last_log_us{0};
 };
@@ -40,6 +40,7 @@ inline void MaybeLog()
     const int64_t pow_calls = c.pow_calls.exchange(0, std::memory_order_relaxed);
     const int64_t pow_hits = c.pow_hits.exchange(0, std::memory_order_relaxed);
     const int64_t pow_misses = c.pow_misses.exchange(0, std::memory_order_relaxed);
+    const int64_t pow_skipped = c.pow_skipped.exchange(0, std::memory_order_relaxed);
     const int64_t pow_us = c.pow_us.exchange(0, std::memory_order_relaxed);
     const int64_t disk_writes = c.disk_writes.exchange(0, std::memory_order_relaxed);
     const int64_t disk_us = c.disk_us.exchange(0, std::memory_order_relaxed);
@@ -47,8 +48,8 @@ inline void MaybeLog()
     const int64_t connect_us = c.connect_us.exchange(0, std::memory_order_relaxed);
 
     LogPrintf("IBDMETRICS interval_us=%d received=%d pow_calls=%d pow_hits=%d "
-              "pow_misses=%d pow_us=%d disk_writes=%d disk_us=%d connected=%d connect_us=%d\n",
-              now - last, received, pow_calls, pow_hits, pow_misses, pow_us,
+              "pow_misses=%d pow_skipped=%d pow_us=%d disk_writes=%d disk_us=%d connected=%d connect_us=%d\n",
+              now - last, received, pow_calls, pow_hits, pow_misses, pow_skipped, pow_us,
               disk_writes, disk_us, connected, connect_us);
 }
 
@@ -66,6 +67,13 @@ inline void RecordPow(bool cache_hit, int64_t elapsed_us)
     c.pow_calls.fetch_add(1, std::memory_order_relaxed);
     (cache_hit ? c.pow_hits : c.pow_misses).fetch_add(1, std::memory_order_relaxed);
     c.pow_us.fetch_add(elapsed_us, std::memory_order_relaxed);
+    MaybeLog();
+}
+
+inline void RecordPowSkipped()
+{
+    if (!Enabled()) return;
+    GetCounters().pow_skipped.fetch_add(1, std::memory_order_relaxed);
     MaybeLog();
 }
 

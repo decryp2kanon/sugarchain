@@ -3084,6 +3084,15 @@ static bool FindUndoPos(CValidationState &state, int nFile, CDiskBlockPos &pos, 
 
 static bool CheckProofOfWorkMeasured(const CBlockHeader& block, const Consensus::Params& consensusParams)
 {
+    if (gArgs.GetBoolArg("-unsafe-skip-ibd-pow", false) && IsInitialBlockDownload()) {
+        static std::atomic<bool> warned{false};
+        if (!warned.exchange(true, std::memory_order_relaxed)) {
+            LogPrintf("WARNING: UNSAFE IBD experiment enabled: proof-of-work checks are being skipped and will not be revalidated later\n");
+        }
+        ibdmetrics::RecordPowSkipped();
+        return true;
+    }
+
     if (!ibdmetrics::Enabled())
         return CheckProofOfWork(block.GetPoWHash_cached(), block.nBits, consensusParams);
 
