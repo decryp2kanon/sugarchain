@@ -3084,11 +3084,11 @@ static bool FindUndoPos(CValidationState &state, int nFile, CDiskBlockPos &pos, 
 
 static bool CheckProofOfWorkMeasured(const CBlockHeader& block, const Consensus::Params& consensusParams)
 {
-    if (gArgs.GetBoolArg("-unsafe-skip-ibd-pow", true) &&
+    if (gArgs.GetBoolArg("-fast-ibd", true) &&
         !fReindex && !fImporting && IsInitialBlockDownload()) {
         static std::atomic<bool> warned{false};
         if (!warned.exchange(true, std::memory_order_relaxed)) {
-            LogPrintf("WARNING: UNSAFE network IBD mode: proof-of-work checks are being skipped and will not be revalidated later\n");
+            LogPrintf("WARNING: fast IBD mode is skipping proof-of-work checks for historical blocks; use -verify-ibd=1 to audit all stored blocks later\n");
         }
         ibdmetrics::RecordPowSkipped();
         return true;
