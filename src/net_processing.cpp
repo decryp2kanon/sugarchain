@@ -3637,7 +3637,12 @@ bool PeerLogicValidation::SendMessages(CNode* pto, std::atomic<bool>& interruptM
         // Message: getdata (blocks)
         //
         std::vector<CInv> vGetData;
-        if (!pto->fClient && (fFetch || !IsInitialBlockDownload()) && state.nBlocksInFlight < MAX_BLOCKS_IN_TRANSIT_PER_PEER) {
+        const bool fInitialBlockDownload = IsInitialBlockDownload();
+        static const unsigned int MAX_IBD_BLOCKS_IN_FLIGHT_PER_PEER = 2000;
+        const unsigned int nBlocksInFlightLimit = fInitialBlockDownload
+            ? MAX_IBD_BLOCKS_IN_FLIGHT_PER_PEER
+            : MAX_BLOCKS_IN_TRANSIT_PER_PEER;
+        if (!pto->fClient && (fFetch || !fInitialBlockDownload) && state.nBlocksInFlight < nBlocksInFlightLimit) {
             std::vector<const CBlockIndex*> vToDownload;
             NodeId staller = -1;
 
@@ -3650,18 +3655,14 @@ bool PeerLogicValidation::SendMessages(CNode* pto, std::atomic<bool>& interruptM
             * available window to one peer can reduce download parallelism by
             * leaving other peers with no pending block requests.
             *
-            * Keep the large in-flight window, but cap per-round assignments so
+            * Keep a large aggregate in-flight window across peers, but cap both
+            * per-round assignments and each peer's accumulated IBD requests so
             * multiple peers have an opportunity to participate in block download.
             *
             * This only affects scheduling fairness and does not reduce the total
             * block download window.
             */
 
-            // Limit only the amount of NEW work assigned in this scheduling pass.
-            // Do not turn this fairness batch into an accumulated per-peer cap:
-            // repeated passes may continue filling a peer all the way to
-            // MAX_BLOCKS_IN_TRANSIT_PER_PEER.
-            //
             // Keep the batch deliberately smaller than the download window so
             // the first peer processed by SendMessages() cannot normally claim
             // the entire currently available range before other peers are
@@ -3672,7 +3673,7 @@ bool PeerLogicValidation::SendMessages(CNode* pto, std::atomic<bool>& interruptM
                     MAX_BLOCKS_IN_TRANSIT_PER_PEER / BLOCK_DOWNLOAD_BATCH_DIVISOR));
 
             const unsigned int nBlocksToRequest =
-                std::min(static_cast<unsigned int>(MAX_BLOCKS_IN_TRANSIT_PER_PEER - state.nBlocksInFlight),
+                std::min(static_cast<unsigned int>(nBlocksInFlightLimit - state.nBlocksInFlight),
                         BLOCK_DOWNLOAD_BATCH_LIMIT);
 
             FindNextBlocksToDownload(pto->GetId(), nBlocksToRequest,
