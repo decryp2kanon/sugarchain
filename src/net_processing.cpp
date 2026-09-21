@@ -2900,27 +2900,15 @@ bool PeerLogicValidation::ProcessMessages(CNode* pfrom, std::atomic<bool>& inter
     if (pfrom->fPauseSend)
         return false;
 
-    // A deep block pipeline can put HEADERS replies behind expensive BLOCK
-    // messages from the same peer. Since this is the only message-processing
-    // thread, that can let block validation catch the known header tip and
-    // temporarily starve block scheduling. Only relax FIFO for HEADERS while
-    // in IBD; all other messages retain their receive order.
-    const bool prioritize_headers = IsInitialBlockDownload();
     std::list<CNetMessage> msgs;
     {
         LOCK(pfrom->cs_vProcessMsg);
         if (pfrom->vProcessMsg.empty())
             return false;
-        auto msg_it = pfrom->vProcessMsg.begin();
-        if (prioritize_headers) {
-            for (auto it = msg_it; it != pfrom->vProcessMsg.end(); ++it) {
-                if (it->hdr.GetCommand() == NetMsgType::HEADERS) {
-                    msg_it = it;
-                    break;
-                }
-            }
-        }
-        msgs.splice(msgs.begin(), pfrom->vProcessMsg, msg_it);
+        // Process messages in receive order. Scanning the entire queue for a
+        // HEADERS message on every call becomes quadratic when a deep IBD
+        // block pipeline leaves thousands of BLOCK messages queued.
+        msgs.splice(msgs.begin(), pfrom->vProcessMsg, pfrom->vProcessMsg.begin());
         pfrom->nProcessQueueSize -= msgs.front().vRecv.size() + CMessageHeader::HEADER_SIZE;
         pfrom->fPauseRecv = pfrom->nProcessQueueSize > connman->GetReceiveFloodSize();
         fMoreWork = !pfrom->vProcessMsg.empty();
