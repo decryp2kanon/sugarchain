@@ -114,6 +114,7 @@ namespace {
         uint256 hash;
         const CBlockIndex* pindex;                               //!< Optional.
         bool fValidatedHeaders;                                  //!< Whether this block has validated headers at the time of request.
+        int64_t nTimeRequested;                                  //!< Request time in microseconds, for IBD diagnostics.
         std::unique_ptr<PartiallyDownloadedBlock> partialBlock;  //!< Optional, used for CMPCTBLOCK downloads
     };
     std::map<uint256, std::pair<NodeId, std::list<QueuedBlock>::iterator> > mapBlocksInFlight;
@@ -278,6 +279,144 @@ CNodeState *State(NodeId pnode) {
     return &it->second;
 }
 
+static const int64_t IBDSTALL_SLOW_NET_OPERATION_US = 250000;
+
+class IBDStallNetOperationTimer
+{
+private:
+    const char* const m_operation;
+    const NodeId m_peer;
+    const int64_t m_start;
+    const bool m_enabled;
+
+public:
+    IBDStallNetOperationTimer(const char* operation, NodeId peer, int64_t start, bool enabled) :
+        m_operation(operation), m_peer(peer), m_start(start), m_enabled(enabled) {}
+
+    ~IBDStallNetOperationTimer()
+    {
+        const int64_t elapsed = GetTimeMicros() - m_start;
+        if (m_enabled && elapsed >= IBDSTALL_SLOW_NET_OPERATION_US) {
+            LogPrintf("IBDSTALL slow operation=%s peer=%d elapsed_ms=%.3f\n",
+                      m_operation, m_peer, elapsed / 1000.0);
+        }
+    }
+};
+
+static void LogIBDStallSnapshot(int64_t now)
+{
+    AssertLockHeld(cs_main);
+
+    static int64_t nLastSample = 0;
+    static int nLastTipHeight = -1;
+    static int64_t nLastLog = 0;
+    static const int64_t SAMPLE_INTERVAL_US = 1000000;
+    static const int64_t LOG_INTERVAL_US = 1000000;
+    static const double STALL_RATE_BLOCKS_PER_SECOND = 100.0;
+    static const size_t MIN_BLOCKS_IN_FLIGHT = 1000;
+    static const int LOOKAHEAD_BLOCKS = 64;
+
+    const int tipHeight = chainActive.Height();
+    if (nLastSample == 0 || nLastTipHeight < 0) {
+        nLastSample = now;
+        nLastTipHeight = tipHeight;
+        return;
+    }
+
+    const int64_t sampleElapsed = now - nLastSample;
+    if (sampleElapsed < SAMPLE_INTERVAL_US) return;
+
+    const int blocksAdvanced = tipHeight - nLastTipHeight;
+    const double blocksPerSecond = blocksAdvanced * 1000000.0 / sampleElapsed;
+    nLastSample = now;
+    nLastTipHeight = tipHeight;
+
+    if (blocksPerSecond > STALL_RATE_BLOCKS_PER_SECOND ||
+        mapBlocksInFlight.size() < MIN_BLOCKS_IN_FLIGHT ||
+        now - nLastLog < LOG_INTERVAL_US) {
+        return;
+    }
+    nLastLog = now;
+
+    int overallMinHeight = std::numeric_limits<int>::max();
+    int overallMaxHeight = -1;
+    NodeId tipNextPeer = -1;
+    int64_t tipNextRequestTime = 0;
+    bool tipNextInFlight = false;
+    bool tipNextHaveData = false;
+    for (const auto& item : mapBlocksInFlight) {
+        const QueuedBlock& queued = *item.second.second;
+        if (!queued.pindex) continue;
+        overallMinHeight = std::min(overallMinHeight, queued.pindex->nHeight);
+        overallMaxHeight = std::max(overallMaxHeight, queued.pindex->nHeight);
+        if (queued.pindex->nHeight == tipHeight + 1 && queued.pindex->pprev == chainActive.Tip()) {
+            tipNextInFlight = true;
+            tipNextPeer = item.second.first;
+            tipNextRequestTime = queued.nTimeRequested;
+        }
+    }
+
+    int firstMissingHeight = -1;
+    bool firstMissingInFlight = false;
+    int holes = 0;
+    int receivedAfterMissing = 0;
+    int inFlightAfterMissing = 0;
+    if (pindexBestHeader && chainActive.Tip() && pindexBestHeader->nHeight > tipHeight) {
+        const int lookaheadEnd = std::min(tipHeight + LOOKAHEAD_BLOCKS, pindexBestHeader->nHeight);
+        const CBlockIndex* cursor = pindexBestHeader->GetAncestor(lookaheadEnd);
+        std::vector<const CBlockIndex*> lookahead;
+        while (cursor && cursor->nHeight > tipHeight) {
+            lookahead.push_back(cursor);
+            cursor = cursor->pprev;
+        }
+        for (auto it = lookahead.rbegin(); it != lookahead.rend(); ++it) {
+            const CBlockIndex* index = *it;
+            const bool haveData = index->nStatus & BLOCK_HAVE_DATA;
+            const bool inFlight = mapBlocksInFlight.count(index->GetBlockHash()) != 0;
+            if (index->nHeight == tipHeight + 1) tipNextHaveData = haveData;
+            if (!haveData && firstMissingHeight == -1) {
+                firstMissingHeight = index->nHeight;
+                firstMissingInFlight = inFlight;
+            } else if (firstMissingHeight != -1) {
+                if (haveData) ++receivedAfterMissing;
+                if (inFlight) ++inFlightAfterMissing;
+            }
+            if (!haveData && !inFlight) ++holes;
+        }
+    }
+
+    const double tipNextWaitMs = tipNextRequestTime ? (now - tipNextRequestTime) / 1000.0 : -1.0;
+    LogPrintf("IBDSTALL snapshot tip=%d rate=%.2f sample_ms=%.3f total_inflight=%u inflight_range=%d-%d tip_next_have_data=%d tip_next_inflight=%d tip_next_peer=%d tip_next_wait_ms=%.3f lookahead=%d first_missing=%d first_missing_inflight=%d holes=%d received_after_missing=%d inflight_after_missing=%d\n",
+              tipHeight, blocksPerSecond, sampleElapsed / 1000.0, static_cast<unsigned int>(mapBlocksInFlight.size()),
+              overallMinHeight == std::numeric_limits<int>::max() ? -1 : overallMinHeight,
+              overallMaxHeight, tipNextHaveData, tipNextInFlight, tipNextPeer, tipNextWaitMs,
+              LOOKAHEAD_BLOCKS, firstMissingHeight, firstMissingInFlight, holes,
+              receivedAfterMissing, inFlightAfterMissing);
+
+    for (const auto& item : mapNodeState) {
+        const CNodeState& state = item.second;
+        if (state.nBlocksInFlight == 0) continue;
+        int peerMinHeight = std::numeric_limits<int>::max();
+        int peerMaxHeight = -1;
+        for (const QueuedBlock& queued : state.vBlocksInFlight) {
+            if (!queued.pindex) continue;
+            peerMinHeight = std::min(peerMinHeight, queued.pindex->nHeight);
+            peerMaxHeight = std::max(peerMaxHeight, queued.pindex->nHeight);
+        }
+        const double frontWaitMs = state.vBlocksInFlight.empty()
+            ? -1.0
+            : (now - state.vBlocksInFlight.front().nTimeRequested) / 1000.0;
+        LogPrintf("IBDSTALL peer=%d inflight=%d range=%d-%d front_height=%d front_wait_ms=%.3f downloading_since_ms=%.3f\n",
+                  item.first, state.nBlocksInFlight,
+                  peerMinHeight == std::numeric_limits<int>::max() ? -1 : peerMinHeight,
+                  peerMaxHeight,
+                  state.vBlocksInFlight.empty() || !state.vBlocksInFlight.front().pindex
+                      ? -1 : state.vBlocksInFlight.front().pindex->nHeight,
+                  frontWaitMs,
+                  state.nDownloadingSince ? (now - state.nDownloadingSince) / 1000.0 : -1.0);
+    }
+}
+
 void UpdatePreferredDownload(CNode* node, CNodeState* state)
 {
     nPreferredDownload -= state->fPreferredDownload;
@@ -355,7 +494,7 @@ bool MarkBlockAsInFlight(NodeId nodeid, const uint256& hash, const CBlockIndex* 
     MarkBlockAsReceived(hash);
 
     std::list<QueuedBlock>::iterator it = state->vBlocksInFlight.insert(state->vBlocksInFlight.end(),
-            {hash, pindex, pindex != nullptr, std::unique_ptr<PartiallyDownloadedBlock>(pit ? new PartiallyDownloadedBlock(&mempool) : nullptr)});
+            {hash, pindex, pindex != nullptr, GetTimeMicros(), std::unique_ptr<PartiallyDownloadedBlock>(pit ? new PartiallyDownloadedBlock(&mempool) : nullptr)});
     state->nBlocksInFlight++;
     state->nBlocksInFlightValidHeaders += it->fValidatedHeaders;
     if (state->nBlocksInFlight == 1) {
@@ -467,6 +606,8 @@ bool PeerHasHeader(CNodeState *state, const CBlockIndex *pindex)
 void FindNextBlocksToDownload(NodeId nodeid, unsigned int count, std::vector<const CBlockIndex*>& vBlocks, NodeId& nodeStaller, const Consensus::Params& consensusParams) {
     if (count == 0)
         return;
+
+    IBDStallNetOperationTimer ibdTimer("FindNextBlocksToDownload", nodeid, GetTimeMicros(), IsInitialBlockDownload());
 
     vBlocks.reserve(vBlocks.size() + count);
     CNodeState *state = State(nodeid);
@@ -2876,6 +3017,7 @@ static bool SendRejectsAndCheckIfBanned(CNode* pnode, CConnman* connman)
 
 bool PeerLogicValidation::ProcessMessages(CNode* pfrom, std::atomic<bool>& interruptMsgProc)
 {
+    const int64_t nProcessMessagesStart = GetTimeMicros();
     const CChainParams& chainparams = Params();
     //
     // Message format
@@ -2990,8 +3132,20 @@ bool PeerLogicValidation::ProcessMessages(CNode* pfrom, std::atomic<bool>& inter
         LogPrint(BCLog::NET, "%s(%s, %u bytes) FAILED peer=%d\n", __func__, SanitizeString(strCommand), nMessageSize, pfrom->GetId());
     }
 
+    const int64_t nCsMainWaitStart = GetTimeMicros();
     LOCK(cs_main);
+    const int64_t nCsMainWaitElapsed = GetTimeMicros() - nCsMainWaitStart;
+    if (IsInitialBlockDownload() && nCsMainWaitElapsed >= IBDSTALL_SLOW_NET_OPERATION_US) {
+        LogPrintf("IBDSTALL slow operation=ProcessMessages.cs_main_wait peer=%d command=%s elapsed_ms=%.3f\n",
+                  pfrom->GetId(), SanitizeString(strCommand), nCsMainWaitElapsed / 1000.0);
+    }
     SendRejectsAndCheckIfBanned(pfrom, connman);
+
+    const int64_t nProcessMessagesElapsed = GetTimeMicros() - nProcessMessagesStart;
+    if (IsInitialBlockDownload() && nProcessMessagesElapsed >= IBDSTALL_SLOW_NET_OPERATION_US) {
+        LogPrintf("IBDSTALL slow operation=ProcessMessages peer=%d command=%s elapsed_ms=%.3f\n",
+                  pfrom->GetId(), SanitizeString(strCommand), nProcessMessagesElapsed / 1000.0);
+    }
 
     return fMoreWork;
 }
@@ -3147,6 +3301,7 @@ public:
 
 bool PeerLogicValidation::SendMessages(CNode* pto, std::atomic<bool>& interruptMsgProc)
 {
+    const int64_t nSendMessagesStart = GetTimeMicros();
     const Consensus::Params& consensusParams = Params().GetConsensus();
     {
         // Don't send anything until the version handshake is complete
@@ -3192,6 +3347,7 @@ bool PeerLogicValidation::SendMessages(CNode* pto, std::atomic<bool>& interruptM
         if (SendRejectsAndCheckIfBanned(pto, connman))
             return true;
         CNodeState &state = *State(pto->GetId());
+        IBDStallNetOperationTimer ibdTimer("SendMessages", pto->GetId(), nSendMessagesStart, IsInitialBlockDownload());
 
         // Address refresh broadcast
         int64_t nNow = GetTimeMicros();
@@ -3628,6 +3784,7 @@ bool PeerLogicValidation::SendMessages(CNode* pto, std::atomic<bool>& interruptM
         //
         std::vector<CInv> vGetData;
         const bool fInitialBlockDownload = IsInitialBlockDownload();
+        if (fInitialBlockDownload) LogIBDStallSnapshot(nNow);
         // Keep deep IBD header-only until the best header is effectively at
         // the network tip. Mixing thousands of in-flight block responses into
         // the header-sync connection can otherwise starve header delivery.
