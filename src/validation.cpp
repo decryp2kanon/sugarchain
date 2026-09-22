@@ -4252,10 +4252,35 @@ bool CChainState::RewindBlockIndex(const CChainParams& params)
         // rewind all the way.  Blocks remaining on chainActive at this point
         // must not have their validity reduced.
         if (IsWitnessEnabled(pindexIter->pprev, params.GetConsensus()) && !(pindexIter->nStatus & BLOCK_OPT_WITNESS) && !chainActive.Contains(pindexIter)) {
+            unsigned int newStatus = std::min<unsigned int>(pindexIter->nStatus & BLOCK_VALID_MASK, BLOCK_VALID_TREE) |
+                                     (pindexIter->nStatus & ~BLOCK_VALID_MASK);
+            newStatus &= ~(BLOCK_HAVE_DATA | BLOCK_HAVE_UNDO);
+
+            /**
+             * Only nStatus and nTx from the fields reset below are serialized
+             * by CDiskBlockIndex. nFile/nDataPos/nUndoPos are serialized only
+             * while their corresponding BLOCK_HAVE_* bit is set, and
+             * nChainTx/nSequenceId are memory-only fields.
+             *
+             * RewindBlockIndex runs on every normal startup and scans every
+             * entry in mapBlockIndex. Most old non-active entries have already
+             * been downgraded to BLOCK_VALID_TREE, have their BLOCK_HAVE_DATA
+             * and BLOCK_HAVE_UNDO bits cleared, and have nTx set to zero by a
+             * previous run. Unconditionally inserting those entries into
+             * setDirtyBlockIndex made the final FLUSH_STATE_ALWAYS rewrite all
+             * of them even though their serialized representation was
+             * unchanged. On a block index containing tens of millions of old
+             * entries, that redundant LevelDB batch can take minutes.
+             *
+             * Compare the serialized state before changing the in-memory
+             * fields. The in-memory cleanup and candidate/unlinked-map cleanup
+             * below must still run on every startup, but a database write is
+             * necessary only if nStatus or nTx actually changes.
+             */
+            const bool diskStateChanged = pindexIter->nStatus != newStatus || pindexIter->nTx != 0;
+
             // Reduce validity
-            pindexIter->nStatus = std::min<unsigned int>(pindexIter->nStatus & BLOCK_VALID_MASK, BLOCK_VALID_TREE) | (pindexIter->nStatus & ~BLOCK_VALID_MASK);
-            // Remove have-data flags.
-            pindexIter->nStatus &= ~(BLOCK_HAVE_DATA | BLOCK_HAVE_UNDO);
+            pindexIter->nStatus = newStatus;
             // Remove storage location.
             pindexIter->nFile = 0;
             pindexIter->nDataPos = 0;
@@ -4264,8 +4289,11 @@ bool CChainState::RewindBlockIndex(const CChainParams& params)
             pindexIter->nTx = 0;
             pindexIter->nChainTx = 0;
             pindexIter->nSequenceId = 0;
-            // Make sure it gets written.
-            setDirtyBlockIndex.insert(pindexIter);
+            // Preserve crash consistency for newly downgraded entries while
+            // avoiding writes for entries already persisted in this state.
+            if (diskStateChanged) {
+                setDirtyBlockIndex.insert(pindexIter);
+            }
             // Update indexes
             setBlockIndexCandidates.erase(pindexIter);
             std::pair<std::multimap<CBlockIndex*, CBlockIndex*>::iterator, std::multimap<CBlockIndex*, CBlockIndex*>::iterator> ret = mapBlocksUnlinked.equal_range(pindexIter->pprev);
