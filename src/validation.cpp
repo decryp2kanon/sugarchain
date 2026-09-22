@@ -1105,6 +1105,8 @@ static bool WriteBlockToDisk(const CBlock& block, CDiskBlockPos& pos, const CMes
     return true;
 }
 
+static bool CheckProofOfWorkMeasured(const CBlockHeader& block, const Consensus::Params& consensusParams);
+
 static bool ReadBlockFromDiskInternal(CBlock& block, const CDiskBlockPos& pos,
                                      const Consensus::Params& consensusParams,
                                      const uint256* expectedHash)
@@ -1138,7 +1140,7 @@ static bool ReadBlockFromDiskInternal(CBlock& block, const CDiskBlockPos& pos,
     }
 
     // Check the header
-    if (!CheckProofOfWork(block.GetPoWHash_cached(), block.nBits, consensusParams))
+    if (!CheckProofOfWorkMeasured(block, consensusParams))
         return error("ReadBlockFromDisk: Errors in block header at %s", pos.ToString());
 
     return true;
@@ -3061,11 +3063,32 @@ static bool FindUndoPos(CValidationState &state, int nFile, CDiskBlockPos &pos, 
     return true;
 }
 
+static bool CheckProofOfWorkMeasured(const CBlockHeader& block, const Consensus::Params& consensusParams)
+{
+    if (gArgs.GetBoolArg("-fast-ibd", true) &&
+        !fReindex && !fImporting && IsInitialBlockDownload()) {
+        static std::atomic<bool> warned{false};
+        if (!warned.exchange(true, std::memory_order_relaxed)) {
+            LogPrintf("WARNING: fast IBD mode is skipping proof-of-work checks for historical blocks; use -verify-ibd=1 to audit all stored blocks later\n");
+        }
+        return true;
+    }
+
+    return CheckProofOfWork(block.GetPoWHash_cached(), block.nBits, consensusParams);
+}
+
 static bool CheckBlockHeader(const CBlockHeader& block, CValidationState& state, const Consensus::Params& consensusParams, bool fCheckPOW = true)
 {
     // Check proof of work matches claimed amount
-    if (fCheckPOW && !CheckProofOfWork(block.GetPoWHash_cached(), block.nBits, consensusParams))
+    if (fCheckPOW && !CheckProofOfWorkMeasured(block, consensusParams))
         return state.DoS(50, false, REJECT_INVALID, "high-hash", false, "proof of work failed");
+
+    // FIXME.SUGAR // check PoW: SKIPPED during downloading headers (IBD)
+    // You can see this log when IBD.
+    // This means PoW check during IBD is not actually skipped, but still its checking in another places.
+    // What we skipped is only when Downloading headers, but not else. This makes IBD much faster.
+    // if (IsInitialBlockDownload())
+    //     printf("%s IBD=%d CBH=%s\n", DateTimeStrFormat("%Y-%m-%d %H:%M:%S", GetTime()).c_str(), IsInitialBlockDownload(), block.GetHash().ToString().c_str());
 
     return true;
 }
@@ -3077,8 +3100,9 @@ bool CheckBlock(const CBlock& block, CValidationState& state, const Consensus::P
     if (block.fChecked)
         return true;
 
+    // FIXME.SUGAR // check PoW: SKIPPED during downloading headers (IBD)
     // Check that the header is valid (particularly PoW).  This is mostly
-    // redundant with the call in AcceptBlockHeader.
+    // redundant with the call in AcceptBlockHeader, but when IBD mode, its SKIPPED.
     if (!CheckBlockHeader(block, state, consensusParams, fCheckPOW))
         return false;
 
@@ -3354,7 +3378,9 @@ bool CChainState::AcceptBlockHeader(const CBlockHeader& block, CValidationState&
             return true;
         }
 
-        if (!CheckBlockHeader(block, state, chainparams.GetConsensus()))
+        // FIXME.SUGAR // check PoW: SKIPPED during downloading headers (IBD)
+        // IBD: do not check PoW (Yespower) during Download headers for performance reason
+        if (!IsInitialBlockDownload() && !CheckBlockHeader(block, state, chainparams.GetConsensus()))
             return error("%s: Consensus::CheckBlockHeader: %s, %s", __func__, hash.ToString(), FormatStateMessage(state));
 
         // Get prev block index
