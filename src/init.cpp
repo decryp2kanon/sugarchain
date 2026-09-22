@@ -462,6 +462,7 @@ std::string HelpMessage(HelpMessageMode mode)
     strUsage += HelpMessageOpt("-debug=<category>", strprintf(_("Output debugging information (default: %u, supplying <category> is optional)"), 0) + ". " +
         _("If <category> is not supplied or if <category> = 1, output all debugging information.") + " " + _("<category> can be:") + " " + ListLogCategories() + ".");
     strUsage += HelpMessageOpt("-debugexclude=<category>", strprintf(_("Exclude debugging information for a category. Can be used in conjunction with -debug=1 to output debug logs for all categories except one or more specified categories.")));
+    strUsage += HelpMessageOpt("-ibdmetrics=<0|1>", _("Log aggregate IBD receive, PoW, disk, and chain-connect metrics every 10 seconds and suppress UpdateTip output (default: 0)"));
     strUsage += HelpMessageOpt("-fast-ibd=<0|1>", _("Skip proof-of-work checks only during network IBD; previously skipped blocks are not revalidated, while new blocks after IBD are verified normally; reindex and block import always verify PoW (default: 1, enabled by default)"));
     strUsage += HelpMessageOpt("-verify-ibd=<0|1>", _("Verify every stored block and its proof of work without rebuilding the block index or chainstate; forces -checkblocks=0, -checklevel=1, and -fast-ibd=0 (default: 0)"));
     strUsage += HelpMessageOpt("-help-debug", _("Show all debugging options (usage: --help -help-debug)"));
