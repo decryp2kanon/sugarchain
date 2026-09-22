@@ -3630,11 +3630,20 @@ bool PeerLogicValidation::SendMessages(CNode* pto, std::atomic<bool>& interruptM
         //
         std::vector<CInv> vGetData;
         const bool fInitialBlockDownload = IsInitialBlockDownload();
+        // Keep deep IBD header-only until the best header is effectively at
+        // the network tip. Mixing thousands of in-flight block responses into
+        // the header-sync connection can otherwise starve header delivery.
+        static const int HEADER_SYNC_TIP_THRESHOLD = 17;
+        const bool fHeadersSynced = pindexBestHeader != nullptr &&
+            pindexBestHeader->GetBlockTime() > GetAdjustedTime() -
+                consensusParams.nPowTargetSpacing * HEADER_SYNC_TIP_THRESHOLD;
         static const unsigned int MAX_IBD_BLOCKS_IN_FLIGHT_PER_PEER = 2000;
         const unsigned int nBlocksInFlightLimit = fInitialBlockDownload
             ? MAX_IBD_BLOCKS_IN_FLIGHT_PER_PEER
             : MAX_BLOCKS_IN_TRANSIT_PER_PEER;
-        if (!pto->fClient && (fFetch || !fInitialBlockDownload) && state.nBlocksInFlight < nBlocksInFlightLimit) {
+        if (!pto->fClient && (fFetch || !fInitialBlockDownload) &&
+            (!fInitialBlockDownload || fHeadersSynced) &&
+            state.nBlocksInFlight < nBlocksInFlightLimit) {
             std::vector<const CBlockIndex*> vToDownload;
             NodeId staller = -1;
 
