@@ -100,7 +100,6 @@ BITCOIN_CORE_H = \
   core_memusage.h \
   cuckoocache.h \
   fs.h \
-  ibd_metrics.h \
   httprpc.h \
   httpserver.h \
   indirectmap.h \
