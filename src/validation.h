@@ -109,7 +109,7 @@ static const int MAX_BLOCKTXN_DEPTH = 10;
 // Keep the scheduling horizon large enough to make the enlarged per-peer
 // in-flight limit useful during high-throughput IBD. Per-round assignment is
 // still bounded separately in net_processing.cpp so peers get scheduling turns.
-static const unsigned int BLOCK_DOWNLOAD_WINDOW = 32768;
+static const unsigned int BLOCK_DOWNLOAD_WINDOW = 245760;
 /** Time to wait (in seconds) between writing blocks/block index to disk. */
 static const unsigned int DATABASE_WRITE_INTERVAL = 60 * 60;
 /** Time to wait (in seconds) between flushing chainstate to disk. */
