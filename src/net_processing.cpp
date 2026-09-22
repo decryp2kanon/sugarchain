@@ -3797,6 +3797,34 @@ bool PeerLogicValidation::SendMessages(CNode* pto, std::atomic<bool>& interruptM
         const unsigned int nBlocksInFlightLimit = fInitialBlockDownload
             ? MAX_IBD_BLOCKS_IN_FLIGHT_PER_PEER
             : MAX_BLOCKS_IN_TRANSIT_PER_PEER;
+
+        // If the block immediately after our tip has spent too long assigned
+        // to another peer, move just that critical request to this peer.  The
+        // normal stalling logic only triggers when the download window cannot
+        // advance; it does not detect a slow peer holding the front of an
+        // otherwise busy IBD pipeline.
+        if (fInitialBlockDownload && fHeadersSynced && fFetch && !pto->fClient &&
+            static_cast<unsigned int>(state.nBlocksInFlight) < nBlocksInFlightLimit && chainActive.Tip() &&
+            pindexBestHeader && pindexBestHeader->nHeight > chainActive.Height()) {
+            const CBlockIndex* pindexNext = pindexBestHeader->GetAncestor(chainActive.Height() + 1);
+            if (pindexNext && pindexNext->pprev == chainActive.Tip() && PeerHasHeader(&state, pindexNext)) {
+                const auto itInFlight = mapBlocksInFlight.find(pindexNext->GetBlockHash());
+                if (itInFlight != mapBlocksInFlight.end() &&
+                    itInFlight->second.first != pto->GetId() &&
+                    itInFlight->second.second->nTimeRequested <
+                        nNow - 1000000 * BLOCK_STALL_REASSIGN_TIMEOUT) {
+                    const NodeId previousPeer = itInFlight->second.first;
+                    const int64_t requestAge = nNow - itInFlight->second.second->nTimeRequested;
+                    const uint256 hash = pindexNext->GetBlockHash();
+                    MarkBlockAsReceived(hash);
+                    vGetData.push_back(CInv(MSG_BLOCK | GetFetchFlags(pto), hash));
+                    MarkBlockAsInFlight(pto->GetId(), hash, pindexNext);
+                    LogPrintf("IBDSTALL reassign tip block height=%d from_peer=%d to_peer=%d age_ms=%.3f\n",
+                              pindexNext->nHeight, previousPeer, pto->GetId(), requestAge / 1000.0);
+                }
+            }
+        }
+
         /**
          * Refill a deep-IBD peer's request queue only after half of its
          * in-flight allowance has drained.  FindNextBlocksToDownload walks a
