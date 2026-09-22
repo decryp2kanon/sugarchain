@@ -3827,9 +3827,9 @@ bool PeerLogicValidation::SendMessages(CNode* pto, std::atomic<bool>& interruptM
             pindexBestHeader->GetBlockTime() > GetAdjustedTime() -
                 consensusParams.nPowTargetSpacing * HEADER_SYNC_TIP_THRESHOLD;
         static const unsigned int MAX_IBD_BLOCKS_IN_FLIGHT_PER_PEER = 2000;
-        static const unsigned int IBD_BLOCKS_IN_FLIGHT_REFILL_THRESHOLD = 1000;
         static const unsigned int MIN_IBD_BLOCKS_IN_FLIGHT_PER_PEER = 128;
         static const unsigned int IBD_DELIVERY_TARGET_SECONDS = 2;
+        static const unsigned int IBD_CRITICAL_RANGE_BATCH_LIMIT = 256;
         const unsigned int nBlocksInFlightLimit = fInitialBlockDownload
             ? MAX_IBD_BLOCKS_IN_FLIGHT_PER_PEER
             : MAX_BLOCKS_IN_TRANSIT_PER_PEER;
@@ -3840,25 +3840,26 @@ bool PeerLogicValidation::SendMessages(CNode* pto, std::atomic<bool>& interruptM
         const unsigned int nBlocksInFlightTarget = fInitialBlockDownload
             ? nIBDDeliveryTarget
             : nBlocksInFlightLimit;
-        const unsigned int nIBDRefillThreshold = std::min(
-            IBD_BLOCKS_IN_FLIGHT_REFILL_THRESHOLD,
+        const unsigned int nIBDRequestBatch = std::min(
+            IBD_CRITICAL_RANGE_BATCH_LIMIT,
             std::max(1u, nIBDDeliveryTarget / 2));
+        const unsigned int nIBDRefillThreshold = nIBDDeliveryTarget - nIBDRequestBatch;
         if (fInitialBlockDownload && nNow - state.nIBDBalanceLogTime >= 5000000) {
-            LogPrintf("IBDSTALL balance peer=%d delivery_rate=%.2f target=%u inflight=%d\n",
+            LogPrintf("IBDSTALL balance peer=%d delivery_rate=%.2f target=%u batch=%u inflight=%d\n",
                       pto->GetId(), state.dIBDBlockDeliveryRate,
-                      nIBDDeliveryTarget, state.nBlocksInFlight);
+                      nIBDDeliveryTarget, nIBDRequestBatch, state.nBlocksInFlight);
             state.nIBDBalanceLogTime = nNow;
         }
         /**
-         * Refill a deep-IBD peer's request queue only after half of its
-         * delivery-rate target has drained. FindNextBlocksToDownload walks a
+         * Refill a deep-IBD peer's request queue after one bounded request
+         * batch has drained. FindNextBlocksToDownload walks a
          * download window of up to BLOCK_DOWNLOAD_WINDOW entries, skipping
          * blocks which are already present or assigned to another peer.
          *
-         * Fast peers can still use the full 2,000-block allowance. Slow or
-         * not-yet-measured peers receive only about two seconds of work, which
-         * prevents one peer from owning a large contiguous range at the chain
-         * tip. Outside IBD, preserve the original behavior and refill as soon
+         * Fast peers can still use the full 2,000-block allowance, but no peer
+         * receives more than 256 consecutive new assignments in one round.
+         * Slow or not-yet-measured peers receive only about two seconds of
+         * work. Outside IBD, preserve the original behavior and refill as soon
          * as any normal in-flight slot is free.
          */
         const bool fRefillBlockRequests = fInitialBlockDownload
@@ -3898,7 +3899,7 @@ bool PeerLogicValidation::SendMessages(CNode* pto, std::atomic<bool>& interruptM
 
             const unsigned int nBlocksToRequest =
                 std::min(static_cast<unsigned int>(nBlocksInFlightTarget - state.nBlocksInFlight),
-                        BLOCK_DOWNLOAD_BATCH_LIMIT);
+                        fInitialBlockDownload ? nIBDRequestBatch : BLOCK_DOWNLOAD_BATCH_LIMIT);
 
             FindNextBlocksToDownload(pto->GetId(), nBlocksToRequest,
                                      vToDownload, staller, consensusParams);
