@@ -3636,7 +3636,7 @@ bool PeerLogicValidation::SendMessages(CNode* pto, std::atomic<bool>& interruptM
             pindexBestHeader->GetBlockTime() > GetAdjustedTime() -
                 consensusParams.nPowTargetSpacing * HEADER_SYNC_TIP_THRESHOLD;
         static const unsigned int MAX_IBD_BLOCKS_IN_FLIGHT_PER_PEER = 2000;
-        static const unsigned int IBD_BLOCKS_IN_FLIGHT_REFILL_THRESHOLD = 1500;
+        static const unsigned int IBD_BLOCKS_IN_FLIGHT_REFILL_THRESHOLD = 1000;
         static const unsigned int IBD_BLOCK_REQUEST_BATCH_LIMIT = 500;
         const unsigned int nBlocksInFlightLimit = fInitialBlockDownload
             ? MAX_IBD_BLOCKS_IN_FLIGHT_PER_PEER
