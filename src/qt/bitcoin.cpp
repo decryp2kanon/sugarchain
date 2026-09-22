@@ -52,6 +52,8 @@
 #include <QTranslator>
 #include <QSslConfiguration>
 
+static int64_t qt_startup_time_ms = 0;
+
 #if defined(QT_STATICPLUGIN)
 #include <QtPlugin>
 #if QT_VERSION < 0x050000
@@ -504,6 +506,10 @@ void BitcoinApplication::initializeResult(bool success)
         }
         Q_EMIT splashFinished(window);
 
+        const int64_t startup_elapsed_ms = GetTimeMillis() - qt_startup_time_ms;
+        LogPrintf("Qt wallet ready: startup_elapsed_ms=%d (%.1f seconds)\n",
+                  startup_elapsed_ms, startup_elapsed_ms / 1000.0);
+
 #ifdef ENABLE_WALLET
         // Now that initialization/startup is done, process any command-line
         // bitcoin: URIs or payment requests:
@@ -544,6 +550,7 @@ WId BitcoinApplication::getMainWinId() const
 #ifndef BITCOIN_QT_TEST
 int main(int argc, char *argv[])
 {
+    qt_startup_time_ms = GetTimeMillis();
     SetupEnvironment();
 
     /// 1. Parse command-line options. These take precedence over anything else.
