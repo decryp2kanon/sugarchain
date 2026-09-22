@@ -182,6 +182,8 @@ struct CNodeState {
     bool fSyncStarted;
     //! When to potentially disconnect peer for stalling headers download
     int64_t nHeadersSyncTimeout;
+    //! IBD metrics: when the most recent getheaders request was queued.
+    int64_t nHeadersRequestTime;
     //! Since when we're stalling block download progress (in microseconds), or 0.
     int64_t nStallingSince;
     std::list<QueuedBlock> vBlocksInFlight;
@@ -252,6 +254,7 @@ struct CNodeState {
         nUnconnectingHeaders = 0;
         fSyncStarted = false;
         nHeadersSyncTimeout = 0;
+        nHeadersRequestTime = 0;
         nStallingSince = 0;
         nDownloadingSince = 0;
         nBlocksInFlight = 0;
@@ -1403,6 +1406,9 @@ bool static ProcessHeadersMessage(CNode *pfrom, CConnman *connman, const std::ve
             // TODO: optimize: if pindexLast is an ancestor of chainActive.Tip or pindexBestHeader, continue
             // from there instead.
             LogPrint(BCLog::NET, "more getheaders (%d) to end to peer=%d (startheight:%d)\n", pindexLast->nHeight, pfrom->GetId(), pfrom->nStartingHeight);
+            if (ibdmetrics::Enabled()) {
+                nodestate->nHeadersRequestTime = ibdmetrics::Now();
+            }
             connman->PushMessage(pfrom, msgMaker.Make(NetMsgType::GETHEADERS, chainActive.GetLocator(pindexLast), uint256()));
         }
 
@@ -2583,6 +2589,14 @@ bool static ProcessMessage(CNode* pfrom, const std::string& strCommand, CDataStr
 
     else if (strCommand == NetMsgType::HEADERS && !fImporting && !fReindex) // Ignore headers received while importing
     {
+        const int64_t headers_receive_us = ibdmetrics::Enabled() ? ibdmetrics::Now() : 0;
+        int64_t headers_request_us = 0;
+        if (headers_receive_us) {
+            LOCK(cs_main);
+            CNodeState* nodestate = State(pfrom->GetId());
+            if (nodestate) headers_request_us = nodestate->nHeadersRequestTime;
+        }
+
         std::vector<CBlockHeader> headers;
 
         // Bypass the normal CBlock deserialization, as we don't want to risk deserializing 2000 full blocks.
@@ -2597,13 +2611,29 @@ bool static ProcessMessage(CNode* pfrom, const std::string& strCommand, CDataStr
             vRecv >> headers[n];
             ReadCompactSize(vRecv); // ignore tx count; assume it is 0.
         }
+        const int64_t headers_parsed_us = headers_receive_us ? ibdmetrics::Now() : 0;
 
         // Headers received via a HEADERS message should be valid, and reflect
         // the chain the peer is on. If we receive a known-invalid header,
         // disconnect the peer if it is using one of our outbound connection
         // slots.
         bool should_punish = !pfrom->fInbound && !pfrom->m_manual_connection;
-        return ProcessHeadersMessage(pfrom, connman, headers, chainparams, should_punish);
+        const bool result = ProcessHeadersMessage(pfrom, connman, headers, chainparams, should_punish);
+        if (headers_receive_us) {
+            const int64_t headers_done_us = ibdmetrics::Now();
+            int header_height = -1;
+            {
+                LOCK(cs_main);
+                if (pindexBestHeader) header_height = pindexBestHeader->nHeight;
+            }
+            LogPrintf("IBDHEADERS peer=%d count=%u height=%d wait_us=%d parse_us=%d process_us=%d total_us=%d\n",
+                      pfrom->GetId(), nCount, header_height,
+                      headers_request_us ? headers_receive_us - headers_request_us : -1,
+                      headers_parsed_us - headers_receive_us,
+                      headers_done_us - headers_parsed_us,
+                      headers_request_us ? headers_done_us - headers_request_us : -1);
+        }
+        return result;
     }
 
     else if (strCommand == NetMsgType::BLOCK && !fImporting && !fReindex) // Ignore blocks received while importing
@@ -3255,6 +3285,9 @@ bool PeerLogicValidation::SendMessages(CNode* pto, std::atomic<bool>& interruptM
                 if (pindexStart->pprev)
                     pindexStart = pindexStart->pprev;
                 LogPrint(BCLog::NET, "initial getheaders (%d) to peer=%d (startheight:%d)\n", pindexStart->nHeight, pto->GetId(), pto->nStartingHeight);
+                if (ibdmetrics::Enabled()) {
+                    state.nHeadersRequestTime = ibdmetrics::Now();
+                }
                 connman->PushMessage(pto, msgMaker.Make(NetMsgType::GETHEADERS, chainActive.GetLocator(pindexStart), uint256()));
             }
         }
