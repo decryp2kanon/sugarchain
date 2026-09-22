@@ -3637,6 +3637,7 @@ bool PeerLogicValidation::SendMessages(CNode* pto, std::atomic<bool>& interruptM
                 consensusParams.nPowTargetSpacing * HEADER_SYNC_TIP_THRESHOLD;
         static const unsigned int MAX_IBD_BLOCKS_IN_FLIGHT_PER_PEER = 2000;
         static const unsigned int IBD_BLOCKS_IN_FLIGHT_REFILL_THRESHOLD = 1500;
+        static const unsigned int IBD_BLOCK_REQUEST_BATCH_LIMIT = 500;
         const unsigned int nBlocksInFlightLimit = fInitialBlockDownload
             ? MAX_IBD_BLOCKS_IN_FLIGHT_PER_PEER
             : MAX_BLOCKS_IN_TRANSIT_PER_PEER;
@@ -3689,10 +3690,13 @@ bool PeerLogicValidation::SendMessages(CNode* pto, std::atomic<bool>& interruptM
             const unsigned int BLOCK_DOWNLOAD_BATCH_LIMIT =
                 std::max(1u, static_cast<unsigned int>(
                     MAX_BLOCKS_IN_TRANSIT_PER_PEER / BLOCK_DOWNLOAD_BATCH_DIVISOR));
+            const unsigned int nBlockRequestBatchLimit = fInitialBlockDownload
+                ? IBD_BLOCK_REQUEST_BATCH_LIMIT
+                : BLOCK_DOWNLOAD_BATCH_LIMIT;
 
             const unsigned int nBlocksToRequest =
                 std::min(static_cast<unsigned int>(nBlocksInFlightLimit - state.nBlocksInFlight),
-                        BLOCK_DOWNLOAD_BATCH_LIMIT);
+                        nBlockRequestBatchLimit);
 
             FindNextBlocksToDownload(pto->GetId(), nBlocksToRequest,
                                      vToDownload, staller, consensusParams);
