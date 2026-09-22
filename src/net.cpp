@@ -14,7 +14,6 @@
 #include <consensus/consensus.h>
 #include <crypto/common.h>
 #include <crypto/sha256.h>
-#include <ibd_metrics.h>
 #include <primitives/transaction.h>
 #include <netbase.h>
 #include <scheduler.h>
@@ -1998,32 +1997,8 @@ void CConnman::ThreadMessageHandler()
 {
     static constexpr unsigned int MAX_MESSAGES_PER_PEER_PER_ROUND = 64;
 
-    /**
-     * The block-level IBD counters account for validation and disk work, but
-     * they cannot show time spent by the single message-handler thread around
-     * that work.  Measure each part of this outer loop separately so a full
-     * receive queue can be distinguished from send processing, send-lock
-     * contention, and condition-variable sleeps.  The counters are enabled by
-     * the existing -ibdmetrics option and are deliberately aggregated over ten
-     * seconds to keep diagnostic logging out of the hot per-message path.
-     */
-    const bool fIBDMetrics = ibdmetrics::Enabled();
-    int64_t nMetricsStart = GetTimeMicros();
-    int64_t nLoopTime = 0;
-    int64_t nProcessTime = 0;
-    int64_t nSendLockWaitTime = 0;
-    int64_t nSendTime = 0;
-    int64_t nWaitTime = 0;
-    int64_t nLoops = 0;
-    int64_t nNodesVisited = 0;
-    int64_t nProcessCalls = 0;
-    int64_t nProcessMoreWork = 0;
-    int64_t nSendCalls = 0;
-    int64_t nWaitCalls = 0;
-
     while (!flagInterruptMsgProc)
     {
-        const int64_t nLoopStart = fIBDMetrics ? GetTimeMicros() : 0;
         std::vector<CNode*> vNodesCopy;
         {
             LOCK(cs_vNodes);
@@ -2059,13 +2034,7 @@ void CConnman::ThreadMessageHandler()
              */
             bool fMoreNodeWork = false;
             for (unsigned int n = 0; n < MAX_MESSAGES_PER_PEER_PER_ROUND; ++n) {
-                const int64_t nProcessStart = fIBDMetrics ? GetTimeMicros() : 0;
                 fMoreNodeWork = m_msgproc->ProcessMessages(pnode, flagInterruptMsgProc);
-                if (fIBDMetrics) {
-                    nProcessTime += GetTimeMicros() - nProcessStart;
-                    ++nProcessCalls;
-                    nProcessMoreWork += fMoreNodeWork;
-                }
                 if (flagInterruptMsgProc)
                     return;
                 if (!fMoreNodeWork || pnode->fPauseSend || pnode->fDisconnect)
@@ -2074,16 +2043,8 @@ void CConnman::ThreadMessageHandler()
             fMoreWork |= (fMoreNodeWork && !pnode->fPauseSend);
             // Send messages
             {
-                const int64_t nSendLockStart = fIBDMetrics ? GetTimeMicros() : 0;
                 LOCK(pnode->cs_sendProcessing);
-                const int64_t nSendStart = fIBDMetrics ? GetTimeMicros() : 0;
-                if (fIBDMetrics)
-                    nSendLockWaitTime += nSendStart - nSendLockStart;
                 m_msgproc->SendMessages(pnode, flagInterruptMsgProc);
-                if (fIBDMetrics) {
-                    nSendTime += GetTimeMicros() - nSendStart;
-                    ++nSendCalls;
-                }
             }
 
             if (flagInterruptMsgProc)
@@ -2098,42 +2059,9 @@ void CConnman::ThreadMessageHandler()
 
         std::unique_lock<std::mutex> lock(mutexMsgProc);
         if (!fMoreWork) {
-            const int64_t nWaitStart = fIBDMetrics ? GetTimeMicros() : 0;
             condMsgProc.wait_until(lock, std::chrono::steady_clock::now() + std::chrono::milliseconds(100), [this] { return fMsgProcWake; });
-            if (fIBDMetrics) {
-                nWaitTime += GetTimeMicros() - nWaitStart;
-                ++nWaitCalls;
-            }
         }
         fMsgProcWake = false;
-
-        if (!fIBDMetrics)
-            continue;
-
-        ++nLoops;
-        nNodesVisited += static_cast<int64_t>(vNodesCopy.size());
-        nLoopTime += GetTimeMicros() - nLoopStart;
-
-        const int64_t nNow = GetTimeMicros();
-        if (nNow - nMetricsStart >= 10 * 1000000) {
-            LogPrintf("IBDLOOP interval_us=%d loops=%d nodes=%d process_calls=%d more_work=%d process_us=%d send_calls=%d send_lock_us=%d send_us=%d wait_calls=%d wait_us=%d loop_us=%d\n",
-                      nNow - nMetricsStart, nLoops, nNodesVisited,
-                      nProcessCalls, nProcessMoreWork, nProcessTime,
-                      nSendCalls, nSendLockWaitTime, nSendTime,
-                      nWaitCalls, nWaitTime, nLoopTime);
-            nMetricsStart = nNow;
-            nLoopTime = 0;
-            nProcessTime = 0;
-            nSendLockWaitTime = 0;
-            nSendTime = 0;
-            nWaitTime = 0;
-            nLoops = 0;
-            nNodesVisited = 0;
-            nProcessCalls = 0;
-            nProcessMoreWork = 0;
-            nSendCalls = 0;
-            nWaitCalls = 0;
-        }
     }
 }
 

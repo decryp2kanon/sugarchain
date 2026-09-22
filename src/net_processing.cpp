@@ -12,7 +12,6 @@
 #include <chainparams.h>
 #include <consensus/validation.h>
 #include <hash.h>
-#include <ibd_metrics.h>
 #include <init.h>
 #include <validation.h>
 #include <merkleblock.h>
@@ -115,7 +114,6 @@ namespace {
         uint256 hash;
         const CBlockIndex* pindex;                               //!< Optional.
         bool fValidatedHeaders;                                  //!< Whether this block has validated headers at the time of request.
-        int64_t nRequestTime;                                    //!< Request time, for IBD head-of-line diagnostics.
         std::unique_ptr<PartiallyDownloadedBlock> partialBlock;  //!< Optional, used for CMPCTBLOCK downloads
     };
     std::map<uint256, std::pair<NodeId, std::list<QueuedBlock>::iterator> > mapBlocksInFlight;
@@ -242,12 +240,6 @@ struct CNodeState {
     //! Time of last new block announcement
     int64_t m_last_block_announcement;
 
-    /** Per-peer IBD diagnostics. Protected by cs_main. */
-    int64_t m_ibd_received_blocks;
-    int64_t m_ibd_received_bytes;
-    int64_t m_ibd_block_process_us;
-    int64_t m_ibd_next_log_us;
-
     CNodeState(CAddress addrIn, std::string addrNameIn) : address(addrIn), name(addrNameIn) {
         fCurrentlyConnected = false;
         nMisbehavior = 0;
@@ -272,10 +264,6 @@ struct CNodeState {
         fSupportsDesiredCmpctVersion = false;
         m_chain_sync = { 0, nullptr, false, false };
         m_last_block_announcement = 0;
-        m_ibd_received_blocks = 0;
-        m_ibd_received_bytes = 0;
-        m_ibd_block_process_us = 0;
-        m_ibd_next_log_us = 0;
     }
 };
 
@@ -367,8 +355,7 @@ bool MarkBlockAsInFlight(NodeId nodeid, const uint256& hash, const CBlockIndex* 
     MarkBlockAsReceived(hash);
 
     std::list<QueuedBlock>::iterator it = state->vBlocksInFlight.insert(state->vBlocksInFlight.end(),
-            {hash, pindex, pindex != nullptr, GetTimeMicros(),
-             std::unique_ptr<PartiallyDownloadedBlock>(pit ? new PartiallyDownloadedBlock(&mempool) : nullptr)});
+            {hash, pindex, pindex != nullptr, std::unique_ptr<PartiallyDownloadedBlock>(pit ? new PartiallyDownloadedBlock(&mempool) : nullptr)});
     state->nBlocksInFlight++;
     state->nBlocksInFlightValidHeaders += it->fValidatedHeaders;
     if (state->nBlocksInFlight == 1) {
@@ -2620,12 +2607,8 @@ bool static ProcessMessage(CNode* pfrom, const std::string& strCommand, CDataStr
 
     else if (strCommand == NetMsgType::BLOCK && !fImporting && !fReindex) // Ignore blocks received while importing
     {
-        const bool measureIBDPeer = ibdmetrics::Enabled();
-        const int64_t blockProcessStart = measureIBDPeer ? GetTimeMicros() : 0;
-        const int64_t blockMessageBytes = measureIBDPeer ? vRecv.size() : 0;
         std::shared_ptr<CBlock> pblock = std::make_shared<CBlock>();
         vRecv >> *pblock;
-        ibdmetrics::RecordReceived();
 
         LogPrint(BCLog::NET, "received block %s peer=%d\n", pblock->GetHash().ToString(), pfrom->GetId());
 
@@ -2647,15 +2630,6 @@ bool static ProcessMessage(CNode* pfrom, const std::string& strCommand, CDataStr
         } else {
             LOCK(cs_main);
             mapBlockSource.erase(pblock->GetHash());
-        }
-        if (measureIBDPeer) {
-            LOCK(cs_main);
-            CNodeState* peerState = State(pfrom->GetId());
-            if (peerState != nullptr) {
-                ++peerState->m_ibd_received_blocks;
-                peerState->m_ibd_received_bytes += blockMessageBytes;
-                peerState->m_ibd_block_process_us += GetTimeMicros() - blockProcessStart;
-            }
         }
     }
 
@@ -3173,36 +3147,6 @@ public:
 
 bool PeerLogicValidation::SendMessages(CNode* pto, std::atomic<bool>& interruptMsgProc)
 {
-    /**
-     * Break down the remaining SendMessages cost observed during deep IBD.
-     * The outer message-loop timer identifies this function as a bottleneck,
-     * but cannot distinguish routine peer maintenance from block selection and
-     * request bookkeeping.  These counters therefore separate main-lock
-     * acquisition, announcements/inventory maintenance, stall and eviction
-     * checks, block scheduling, FindNextBlocksToDownload, in-flight marking,
-     * and the final non-block/fee-filter work.  Measurements are accumulated
-     * across peers and emitted once per ten seconds under -ibdmetrics so the
-     * diagnostic itself does not add a log operation to every scheduling pass.
-     */
-    struct IBDSendMetrics {
-        int64_t next_log_us{0};
-        int64_t calls{0};
-        int64_t lock_misses{0};
-        int64_t lock_us{0};
-        int64_t maintenance_us{0};
-        int64_t stall_us{0};
-        int64_t eviction_us{0};
-        int64_t scheduling_us{0};
-        int64_t find_us{0};
-        int64_t mark_us{0};
-        int64_t tail_us{0};
-        int64_t total_us{0};
-        int64_t requested{0};
-    };
-    static IBDSendMetrics ibdSendMetrics;
-    const bool fMeasureIBD = ibdmetrics::Enabled();
-    const int64_t nSendCallStart = fMeasureIBD ? GetTimeMicros() : 0;
-
     const Consensus::Params& consensusParams = Params().GetConsensus();
     {
         // Don't send anything until the version handshake is complete
@@ -3241,20 +3185,13 @@ bool PeerLogicValidation::SendMessages(CNode* pto, std::atomic<bool>& interruptM
             }
         }
 
-        const int64_t nLockStart = fMeasureIBD ? GetTimeMicros() : 0;
         TRY_LOCK(cs_main, lockMain); // Acquire cs_main for IsInitialBlockDownload() and CNodeState()
-        if (fMeasureIBD)
-            ibdSendMetrics.lock_us += GetTimeMicros() - nLockStart;
-        if (!lockMain) {
-            if (fMeasureIBD)
-                ++ibdSendMetrics.lock_misses;
+        if (!lockMain)
             return true;
-        }
 
         if (SendRejectsAndCheckIfBanned(pto, connman))
             return true;
         CNodeState &state = *State(pto->GetId());
-        const int64_t nMaintenanceStart = fMeasureIBD ? GetTimeMicros() : 0;
 
         // Address refresh broadcast
         int64_t nNow = GetTimeMicros();
@@ -3603,62 +3540,8 @@ bool PeerLogicValidation::SendMessages(CNode* pto, std::atomic<bool>& interruptM
         if (!vInv.empty())
             connman->PushMessage(pto, msgMaker.Make(NetMsgType::INV, vInv));
 
-        if (fMeasureIBD)
-            ibdSendMetrics.maintenance_us += GetTimeMicros() - nMaintenanceStart;
-
         // Detect whether we're stalling
-        const int64_t nStallStart = fMeasureIBD ? GetTimeMicros() : 0;
         nNow = GetTimeMicros();
-
-        // Diagnose IBD head-of-line blocking independently of the download
-        // window stall detector. A missing block immediately after the active
-        // tip prevents already-downloaded successors from being connected,
-        // even while network receive and block-file writes continue normally.
-        static int nLastIBDProgressHeight = -1;
-        static int64_t nLastIBDProgressTime = 0;
-        static int64_t nLastIBDGapLog = 0;
-        const int currentHeight = chainActive.Height();
-        if (currentHeight != nLastIBDProgressHeight) {
-            nLastIBDProgressHeight = currentHeight;
-            nLastIBDProgressTime = nNow;
-        } else if (IsInitialBlockDownload() && pindexBestHeader != nullptr &&
-            pindexBestHeader->nHeight > currentHeight &&
-            nNow - nLastIBDProgressTime >= 5 * 1000000 &&
-            nNow - nLastIBDGapLog >= 5 * 1000000) {
-            const int nextHeight = chainActive.Height() + 1;
-            const CBlockIndex* next = pindexBestHeader->GetAncestor(nextHeight);
-            if (next != nullptr && !(next->nStatus & BLOCK_HAVE_DATA)) {
-                const auto inFlight = mapBlocksInFlight.find(next->GetBlockHash());
-                const bool requested = inFlight != mapBlocksInFlight.end();
-                const NodeId peer = requested ? inFlight->second.first : -1;
-                const int64_t ageMs = requested
-                    ? (nNow - inFlight->second.second->nRequestTime) / 1000
-                    : -1;
-                LogPrintf("IBDGAP next_height=%d hash=%s stalled_ms=%d requested=%d peer=%d age_ms=%d total_inflight=%d\n",
-                          nextHeight, next->GetBlockHash().ToString(),
-                          (nNow - nLastIBDProgressTime) / 1000, requested,
-                          peer, ageMs, static_cast<int>(mapBlocksInFlight.size()));
-                nLastIBDGapLog = nNow;
-            }
-        }
-
-        if (ibdmetrics::Enabled() && IsInitialBlockDownload()) {
-            if (state.m_ibd_next_log_us == 0) {
-                state.m_ibd_next_log_us = nNow + 10 * 1000000;
-            } else if (nNow >= state.m_ibd_next_log_us) {
-                const int64_t oldestMs = state.nBlocksInFlight > 0
-                    ? (nNow - state.nDownloadingSince) / 1000
-                    : -1;
-                LogPrintf("IBDPEER peer=%d blocks=%d bytes=%d process_us=%d inflight=%d oldest_ms=%d\n",
-                          pto->GetId(), state.m_ibd_received_blocks,
-                          state.m_ibd_received_bytes, state.m_ibd_block_process_us,
-                          state.nBlocksInFlight, oldestMs);
-                state.m_ibd_received_blocks = 0;
-                state.m_ibd_received_bytes = 0;
-                state.m_ibd_block_process_us = 0;
-                state.m_ibd_next_log_us = nNow + 10 * 1000000;
-            }
-        }
 
         // During IBD, a slow peer holding the block at the front of the
         // download window can temporarily prevent the window from advancing.
@@ -3736,22 +3619,15 @@ bool PeerLogicValidation::SendMessages(CNode* pto, std::atomic<bool>& interruptM
             }
         }
 
-        if (fMeasureIBD)
-            ibdSendMetrics.stall_us += GetTimeMicros() - nStallStart;
-
         // Check that outbound peers have reasonable chains
-        const int64_t nEvictionStart = fMeasureIBD ? GetTimeMicros() : 0;
         // GetTime() is used by this anti-DoS logic so we can test this using mocktime
         ConsiderEviction(pto, GetTime());
-        if (fMeasureIBD)
-            ibdSendMetrics.eviction_us += GetTimeMicros() - nEvictionStart;
 
         //
         // Message: getdata (blocks)
         //
         std::vector<CInv> vGetData;
         const bool fInitialBlockDownload = IsInitialBlockDownload();
-        const int64_t nSchedulingStart = fMeasureIBD ? GetTimeMicros() : 0;
         // Keep deep IBD header-only until the best header is effectively at
         // the network tip. Mixing thousands of in-flight block responses into
         // the header-sync connection can otherwise starve header delivery.
@@ -3818,14 +3694,8 @@ bool PeerLogicValidation::SendMessages(CNode* pto, std::atomic<bool>& interruptM
                 std::min(static_cast<unsigned int>(nBlocksInFlightLimit - state.nBlocksInFlight),
                         BLOCK_DOWNLOAD_BATCH_LIMIT);
 
-            const int64_t nFindStart = fMeasureIBD ? GetTimeMicros() : 0;
             FindNextBlocksToDownload(pto->GetId(), nBlocksToRequest,
                                      vToDownload, staller, consensusParams);
-            if (fMeasureIBD) {
-                ibdSendMetrics.find_us += GetTimeMicros() - nFindStart;
-                ibdSendMetrics.requested += vToDownload.size();
-            }
-            const int64_t nMarkStart = fMeasureIBD ? GetTimeMicros() : 0;
             for (const CBlockIndex *pindex : vToDownload) {
                 uint32_t nFetchFlags = GetFetchFlags(pto);
                 vGetData.push_back(CInv(MSG_BLOCK | nFetchFlags, pindex->GetBlockHash()));
@@ -3839,13 +3709,7 @@ bool PeerLogicValidation::SendMessages(CNode* pto, std::atomic<bool>& interruptM
                     LogPrint(BCLog::NET, "Stall started peer=%d\n", staller);
                 }
             }
-            if (fMeasureIBD)
-                ibdSendMetrics.mark_us += GetTimeMicros() - nMarkStart;
         }
-
-        if (fMeasureIBD)
-            ibdSendMetrics.scheduling_us += GetTimeMicros() - nSchedulingStart;
-        const int64_t nTailStart = fMeasureIBD ? GetTimeMicros() : 0;
 
         //
         // Message: getdata (non-blocks)
@@ -3899,25 +3763,6 @@ bool PeerLogicValidation::SendMessages(CNode* pto, std::atomic<bool>& interruptM
             }
         }
 
-        if (fMeasureIBD && fInitialBlockDownload) {
-            const int64_t nNowMetrics = GetTimeMicros();
-            ibdSendMetrics.tail_us += nNowMetrics - nTailStart;
-            ibdSendMetrics.total_us += nNowMetrics - nSendCallStart;
-            ++ibdSendMetrics.calls;
-            if (ibdSendMetrics.next_log_us == 0) {
-                ibdSendMetrics.next_log_us = nNowMetrics + 10 * 1000000;
-            } else if (nNowMetrics >= ibdSendMetrics.next_log_us) {
-                LogPrintf("IBDSEND calls=%d lock_misses=%d lock_us=%d maintenance_us=%d stall_us=%d eviction_us=%d scheduling_us=%d find_us=%d mark_us=%d tail_us=%d total_us=%d requested=%d\n",
-                          ibdSendMetrics.calls, ibdSendMetrics.lock_misses,
-                          ibdSendMetrics.lock_us, ibdSendMetrics.maintenance_us,
-                          ibdSendMetrics.stall_us, ibdSendMetrics.eviction_us,
-                          ibdSendMetrics.scheduling_us, ibdSendMetrics.find_us,
-                          ibdSendMetrics.mark_us, ibdSendMetrics.tail_us,
-                          ibdSendMetrics.total_us, ibdSendMetrics.requested);
-                ibdSendMetrics = IBDSendMetrics{};
-                ibdSendMetrics.next_log_us = nNowMetrics + 10 * 1000000;
-            }
-        }
     }
     return true;
 }
