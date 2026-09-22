@@ -242,6 +242,12 @@ struct CNodeState {
     //! Time of last new block announcement
     int64_t m_last_block_announcement;
 
+    /** Per-peer IBD diagnostics. Protected by cs_main. */
+    int64_t m_ibd_received_blocks;
+    int64_t m_ibd_received_bytes;
+    int64_t m_ibd_block_process_us;
+    int64_t m_ibd_next_log_us;
+
     CNodeState(CAddress addrIn, std::string addrNameIn) : address(addrIn), name(addrNameIn) {
         fCurrentlyConnected = false;
         nMisbehavior = 0;
@@ -266,6 +272,10 @@ struct CNodeState {
         fSupportsDesiredCmpctVersion = false;
         m_chain_sync = { 0, nullptr, false, false };
         m_last_block_announcement = 0;
+        m_ibd_received_blocks = 0;
+        m_ibd_received_bytes = 0;
+        m_ibd_block_process_us = 0;
+        m_ibd_next_log_us = 0;
     }
 };
 
@@ -2610,6 +2620,9 @@ bool static ProcessMessage(CNode* pfrom, const std::string& strCommand, CDataStr
 
     else if (strCommand == NetMsgType::BLOCK && !fImporting && !fReindex) // Ignore blocks received while importing
     {
+        const bool measureIBDPeer = ibdmetrics::Enabled();
+        const int64_t blockProcessStart = measureIBDPeer ? GetTimeMicros() : 0;
+        const int64_t blockMessageBytes = measureIBDPeer ? vRecv.size() : 0;
         std::shared_ptr<CBlock> pblock = std::make_shared<CBlock>();
         vRecv >> *pblock;
         ibdmetrics::RecordReceived();
@@ -2634,6 +2647,15 @@ bool static ProcessMessage(CNode* pfrom, const std::string& strCommand, CDataStr
         } else {
             LOCK(cs_main);
             mapBlockSource.erase(pblock->GetHash());
+        }
+        if (measureIBDPeer) {
+            LOCK(cs_main);
+            CNodeState* peerState = State(pfrom->GetId());
+            if (peerState != nullptr) {
+                ++peerState->m_ibd_received_blocks;
+                peerState->m_ibd_received_bytes += blockMessageBytes;
+                peerState->m_ibd_block_process_us += GetTimeMicros() - blockProcessStart;
+            }
         }
     }
 
@@ -3551,9 +3573,16 @@ bool PeerLogicValidation::SendMessages(CNode* pto, std::atomic<bool>& interruptM
         // window stall detector. A missing block immediately after the active
         // tip prevents already-downloaded successors from being connected,
         // even while network receive and block-file writes continue normally.
+        static int nLastIBDProgressHeight = -1;
+        static int64_t nLastIBDProgressTime = 0;
         static int64_t nLastIBDGapLog = 0;
-        if (IsInitialBlockDownload() && pindexBestHeader != nullptr &&
-            pindexBestHeader->nHeight > chainActive.Height() &&
+        const int currentHeight = chainActive.Height();
+        if (currentHeight != nLastIBDProgressHeight) {
+            nLastIBDProgressHeight = currentHeight;
+            nLastIBDProgressTime = nNow;
+        } else if (IsInitialBlockDownload() && pindexBestHeader != nullptr &&
+            pindexBestHeader->nHeight > currentHeight &&
+            nNow - nLastIBDProgressTime >= 5 * 1000000 &&
             nNow - nLastIBDGapLog >= 5 * 1000000) {
             const int nextHeight = chainActive.Height() + 1;
             const CBlockIndex* next = pindexBestHeader->GetAncestor(nextHeight);
@@ -3564,10 +3593,29 @@ bool PeerLogicValidation::SendMessages(CNode* pto, std::atomic<bool>& interruptM
                 const int64_t ageMs = requested
                     ? (nNow - inFlight->second.second->nRequestTime) / 1000
                     : -1;
-                LogPrintf("IBDGAP next_height=%d hash=%s requested=%d peer=%d age_ms=%d total_inflight=%d\n",
-                          nextHeight, next->GetBlockHash().ToString(), requested,
-                          peer, ageMs, mapBlocksInFlight.size());
+                LogPrintf("IBDGAP next_height=%d hash=%s stalled_ms=%d requested=%d peer=%d age_ms=%d total_inflight=%d\n",
+                          nextHeight, next->GetBlockHash().ToString(),
+                          (nNow - nLastIBDProgressTime) / 1000, requested,
+                          peer, ageMs, static_cast<int>(mapBlocksInFlight.size()));
                 nLastIBDGapLog = nNow;
+            }
+        }
+
+        if (ibdmetrics::Enabled() && IsInitialBlockDownload()) {
+            if (state.m_ibd_next_log_us == 0) {
+                state.m_ibd_next_log_us = nNow + 10 * 1000000;
+            } else if (nNow >= state.m_ibd_next_log_us) {
+                const int64_t oldestMs = state.nBlocksInFlight > 0
+                    ? (nNow - state.nDownloadingSince) / 1000
+                    : -1;
+                LogPrintf("IBDPEER peer=%d blocks=%d bytes=%d process_us=%d inflight=%d oldest_ms=%d\n",
+                          pto->GetId(), state.m_ibd_received_blocks,
+                          state.m_ibd_received_bytes, state.m_ibd_block_process_us,
+                          state.nBlocksInFlight, oldestMs);
+                state.m_ibd_received_blocks = 0;
+                state.m_ibd_received_bytes = 0;
+                state.m_ibd_block_process_us = 0;
+                state.m_ibd_next_log_us = nNow + 10 * 1000000;
             }
         }
 
