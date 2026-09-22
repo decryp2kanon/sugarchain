@@ -115,6 +115,7 @@ namespace {
         uint256 hash;
         const CBlockIndex* pindex;                               //!< Optional.
         bool fValidatedHeaders;                                  //!< Whether this block has validated headers at the time of request.
+        int64_t nRequestTime;                                    //!< Request time, for IBD head-of-line diagnostics.
         std::unique_ptr<PartiallyDownloadedBlock> partialBlock;  //!< Optional, used for CMPCTBLOCK downloads
     };
     std::map<uint256, std::pair<NodeId, std::list<QueuedBlock>::iterator> > mapBlocksInFlight;
@@ -356,7 +357,8 @@ bool MarkBlockAsInFlight(NodeId nodeid, const uint256& hash, const CBlockIndex* 
     MarkBlockAsReceived(hash);
 
     std::list<QueuedBlock>::iterator it = state->vBlocksInFlight.insert(state->vBlocksInFlight.end(),
-            {hash, pindex, pindex != nullptr, std::unique_ptr<PartiallyDownloadedBlock>(pit ? new PartiallyDownloadedBlock(&mempool) : nullptr)});
+            {hash, pindex, pindex != nullptr, GetTimeMicros(),
+             std::unique_ptr<PartiallyDownloadedBlock>(pit ? new PartiallyDownloadedBlock(&mempool) : nullptr)});
     state->nBlocksInFlight++;
     state->nBlocksInFlightValidHeaders += it->fValidatedHeaders;
     if (state->nBlocksInFlight == 1) {
@@ -3544,6 +3546,30 @@ bool PeerLogicValidation::SendMessages(CNode* pto, std::atomic<bool>& interruptM
 
         // Detect whether we're stalling
         nNow = GetTimeMicros();
+
+        // Diagnose IBD head-of-line blocking independently of the download
+        // window stall detector. A missing block immediately after the active
+        // tip prevents already-downloaded successors from being connected,
+        // even while network receive and block-file writes continue normally.
+        static int64_t nLastIBDGapLog = 0;
+        if (IsInitialBlockDownload() && pindexBestHeader != nullptr &&
+            pindexBestHeader->nHeight > chainActive.Height() &&
+            nNow - nLastIBDGapLog >= 5 * 1000000) {
+            const int nextHeight = chainActive.Height() + 1;
+            const CBlockIndex* next = pindexBestHeader->GetAncestor(nextHeight);
+            if (next != nullptr && !(next->nStatus & BLOCK_HAVE_DATA)) {
+                const auto inFlight = mapBlocksInFlight.find(next->GetBlockHash());
+                const bool requested = inFlight != mapBlocksInFlight.end();
+                const NodeId peer = requested ? inFlight->second.first : -1;
+                const int64_t ageMs = requested
+                    ? (nNow - inFlight->second.second->nRequestTime) / 1000
+                    : -1;
+                LogPrintf("IBDGAP next_height=%d hash=%s requested=%d peer=%d age_ms=%d total_inflight=%d\n",
+                          nextHeight, next->GetBlockHash().ToString(), requested,
+                          peer, ageMs, mapBlocksInFlight.size());
+                nLastIBDGapLog = nNow;
+            }
+        }
 
         // During IBD, a slow peer holding the block at the front of the
         // download window can temporarily prevent the window from advancing.

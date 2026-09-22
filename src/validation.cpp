@@ -2104,14 +2104,27 @@ bool CChainState::ConnectBlock(const CBlock& block, CValidationState& state, CBl
  * or always and in all cases if we're in prune mode and are deleting files.
  */
 bool static FlushStateToDisk(const CChainParams& chainparams, CValidationState &state, FlushStateMode mode, int nManualPruneHeight) {
+    const int64_t flushCallStart = GetTimeMicros();
     int64_t nMempoolUsage = mempool.DynamicMemoryUsage();
     LOCK(cs_main);
+    const int64_t flushLockWaitUs = GetTimeMicros() - flushCallStart;
     static int64_t nLastWrite = 0;
     static int64_t nLastFlush = 0;
     static int64_t nLastSetChain = 0;
     std::set<int> setFilesToPrune;
     bool fFlushForPrune = false;
     bool fDoFullFlush = false;
+    int64_t blockFileUs = 0;
+    int64_t blockIndexUs = 0;
+    int64_t coinsUs = 0;
+    size_t dirtyFiles = 0;
+    size_t dirtyBlocks = 0;
+    int64_t cacheSize = 0;
+    int64_t nTotalSpace = 0;
+    bool fCacheLarge = false;
+    bool fCacheCritical = false;
+    bool fPeriodicWrite = false;
+    bool fPeriodicFlush = false;
     int64_t nNow = 0;
     try {
     {
@@ -2143,16 +2156,16 @@ bool static FlushStateToDisk(const CChainParams& chainparams, CValidationState &
             nLastSetChain = nNow;
         }
         int64_t nMempoolSizeMax = gArgs.GetArg("-maxmempool", DEFAULT_MAX_MEMPOOL_SIZE) * 1000000;
-        int64_t cacheSize = pcoinsTip->DynamicMemoryUsage();
-        int64_t nTotalSpace = nCoinCacheUsage + std::max<int64_t>(nMempoolSizeMax - nMempoolUsage, 0);
+        cacheSize = pcoinsTip->DynamicMemoryUsage();
+        nTotalSpace = nCoinCacheUsage + std::max<int64_t>(nMempoolSizeMax - nMempoolUsage, 0);
         // The cache is large and we're within 10% and 10 MiB of the limit, but we have time now (not in the middle of a block processing).
-        bool fCacheLarge = mode == FLUSH_STATE_PERIODIC && cacheSize > std::max((9 * nTotalSpace) / 10, nTotalSpace - MAX_BLOCK_COINSDB_USAGE * 1024 * 1024);
+        fCacheLarge = mode == FLUSH_STATE_PERIODIC && cacheSize > std::max((9 * nTotalSpace) / 10, nTotalSpace - MAX_BLOCK_COINSDB_USAGE * 1024 * 1024);
         // The cache is over the limit, we have to write now.
-        bool fCacheCritical = mode == FLUSH_STATE_IF_NEEDED && cacheSize > nTotalSpace;
+        fCacheCritical = mode == FLUSH_STATE_IF_NEEDED && cacheSize > nTotalSpace;
         // It's been a while since we wrote the block index to disk. Do this frequently, so we don't need to redownload after a crash.
-        bool fPeriodicWrite = mode == FLUSH_STATE_PERIODIC && nNow > nLastWrite + (int64_t)DATABASE_WRITE_INTERVAL * 1000000;
+        fPeriodicWrite = mode == FLUSH_STATE_PERIODIC && nNow > nLastWrite + (int64_t)DATABASE_WRITE_INTERVAL * 1000000;
         // It's been very long since we flushed the cache. Do this infrequently, to optimize cache usage.
-        bool fPeriodicFlush = mode == FLUSH_STATE_PERIODIC && nNow > nLastFlush + (int64_t)DATABASE_FLUSH_INTERVAL * 1000000;
+        fPeriodicFlush = mode == FLUSH_STATE_PERIODIC && nNow > nLastFlush + (int64_t)DATABASE_FLUSH_INTERVAL * 1000000;
         // Combine all conditions that result in a full cache flush.
         fDoFullFlush = (mode == FLUSH_STATE_ALWAYS) || fCacheLarge || fCacheCritical || fPeriodicFlush || fFlushForPrune;
         // Write blocks and block index to disk.
@@ -2161,24 +2174,30 @@ bool static FlushStateToDisk(const CChainParams& chainparams, CValidationState &
             if (!CheckDiskSpace(0))
                 return state.Error("out of disk space");
             // First make sure all block and undo data is flushed to disk.
+            const int64_t blockFileStart = GetTimeMicros();
             FlushBlockFile();
+            blockFileUs = GetTimeMicros() - blockFileStart;
             // Then update all block file information (which may refer to block and undo files).
             {
                 std::vector<std::pair<int, const CBlockFileInfo*> > vFiles;
                 vFiles.reserve(setDirtyFileInfo.size());
+                dirtyFiles = setDirtyFileInfo.size();
                 for (std::set<int>::iterator it = setDirtyFileInfo.begin(); it != setDirtyFileInfo.end(); ) {
                     vFiles.push_back(std::make_pair(*it, &vinfoBlockFile[*it]));
                     setDirtyFileInfo.erase(it++);
                 }
                 std::vector<const CBlockIndex*> vBlocks;
                 vBlocks.reserve(setDirtyBlockIndex.size());
+                dirtyBlocks = setDirtyBlockIndex.size();
                 for (std::set<CBlockIndex*>::iterator it = setDirtyBlockIndex.begin(); it != setDirtyBlockIndex.end(); ) {
                     vBlocks.push_back(*it);
                     setDirtyBlockIndex.erase(it++);
                 }
+                const int64_t blockIndexStart = GetTimeMicros();
                 if (!pblocktree->WriteBatchSync(vFiles, nLastBlockFile, vBlocks)) {
                     return AbortNode(state, "Failed to write to block index database");
                 }
+                blockIndexUs = GetTimeMicros() - blockIndexStart;
             }
             // Finally remove any pruned files
             if (fFlushForPrune)
@@ -2195,8 +2214,10 @@ bool static FlushStateToDisk(const CChainParams& chainparams, CValidationState &
             if (!CheckDiskSpace(48 * 2 * 2 * pcoinsTip->GetCacheSize()))
                 return state.Error("out of disk space");
             // Flush the chainstate (which may refer to block index entries).
+            const int64_t coinsStart = GetTimeMicros();
             if (!pcoinsTip->Flush())
                 return AbortNode(state, "Failed to write to coin database");
+            coinsUs = GetTimeMicros() - coinsStart;
             nLastFlush = nNow;
         }
     }
@@ -2207,6 +2228,18 @@ bool static FlushStateToDisk(const CChainParams& chainparams, CValidationState &
     }
     } catch (const std::runtime_error& e) {
         return AbortNode(state, std::string("System error while flushing: ") + e.what());
+    }
+    if (fDoFullFlush || fPeriodicWrite) {
+        const char* reason = mode == FLUSH_STATE_ALWAYS ? "always" :
+            fCacheCritical ? "cache-critical" : fCacheLarge ? "cache-large" :
+            fPeriodicFlush ? "periodic-flush" : fFlushForPrune ? "prune" :
+            fPeriodicWrite ? "periodic-write" : "unknown";
+        LogPrintf("DBFLUSH reason=%s full=%d cache_mib=%.1f limit_mib=%.1f dirty_files=%d dirty_blocks=%d lockwait_ms=%.1f blockfile_ms=%.1f blockindex_ms=%.1f coins_ms=%.1f total_ms=%.1f\n",
+                  reason, fDoFullFlush, cacheSize / 1048576.0,
+                  nTotalSpace / 1048576.0, static_cast<int>(dirtyFiles),
+                  static_cast<int>(dirtyBlocks), flushLockWaitUs / 1000.0,
+                  blockFileUs / 1000.0, blockIndexUs / 1000.0,
+                  coinsUs / 1000.0, (GetTimeMicros() - flushCallStart) / 1000.0);
     }
     return true;
 }
