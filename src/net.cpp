@@ -1996,7 +1996,7 @@ void CConnman::OpenNetworkConnection(const CAddress& addrConnect, bool fCountFai
 
 void CConnman::ThreadMessageHandler()
 {
-    static constexpr unsigned int MAX_MESSAGES_PER_PEER_PER_ROUND = 64;
+    static constexpr unsigned int MAX_MESSAGES_PER_PEER_PER_ROUND = 256;
 
     /**
      * The block-level IBD counters account for validation and disk work, but
