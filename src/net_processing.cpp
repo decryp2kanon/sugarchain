@@ -3760,12 +3760,31 @@ bool PeerLogicValidation::SendMessages(CNode* pto, std::atomic<bool>& interruptM
             pindexBestHeader->GetBlockTime() > GetAdjustedTime() -
                 consensusParams.nPowTargetSpacing * HEADER_SYNC_TIP_THRESHOLD;
         static const unsigned int MAX_IBD_BLOCKS_IN_FLIGHT_PER_PEER = 2000;
+        static const unsigned int IBD_BLOCKS_IN_FLIGHT_REFILL_THRESHOLD = 1000;
         const unsigned int nBlocksInFlightLimit = fInitialBlockDownload
             ? MAX_IBD_BLOCKS_IN_FLIGHT_PER_PEER
             : MAX_BLOCKS_IN_TRANSIT_PER_PEER;
+        /**
+         * Refill a deep-IBD peer's request queue only after half of its
+         * in-flight allowance has drained.  FindNextBlocksToDownload walks a
+         * download window of up to BLOCK_DOWNLOAD_WINDOW entries, skipping
+         * blocks which are already present or assigned to another peer.  With
+         * a 2,000-block per-peer limit, invoking it whenever the count fell to
+         * 1,999 repeatedly scanned that large window merely to replace a
+         * handful of completed requests.  Measurements attributed more than
+         * 99 percent of SendMessages time to those repeated searches.
+         *
+         * Keeping 1,000 requests in flight still provides a deep network
+         * pipeline, while refilling back toward 2,000 amortizes one search over
+         * as many as 1,000 new assignments.  Outside IBD, preserve the original
+         * behavior and refill as soon as any normal in-flight slot is free.
+         */
+        const bool fRefillBlockRequests = fInitialBlockDownload
+            ? state.nBlocksInFlight <= IBD_BLOCKS_IN_FLIGHT_REFILL_THRESHOLD
+            : state.nBlocksInFlight < nBlocksInFlightLimit;
         if (!pto->fClient && (fFetch || !fInitialBlockDownload) &&
             (!fInitialBlockDownload || fHeadersSynced) &&
-            state.nBlocksInFlight < nBlocksInFlightLimit) {
+            fRefillBlockRequests) {
             std::vector<const CBlockIndex*> vToDownload;
             NodeId staller = -1;
 
