@@ -18,7 +18,6 @@
 #include <consensus/validation.h>
 #include <cuckoocache.h>
 #include <hash.h>
-#include <ibd_metrics.h>
 #include <init.h>
 #include <policy/fees.h>
 #include <policy/policy.h>
@@ -48,6 +47,7 @@
 
 #include <boost/algorithm/string/replace.hpp>
 #include <boost/algorithm/string/join.hpp>
+#include <boost/bind.hpp>
 #include <boost/thread.hpp>
 
 #if defined(NDEBUG)
@@ -1086,7 +1086,6 @@ bool GetTransaction(const uint256& hash, CTransactionRef& txOut, const Consensus
 
 static bool WriteBlockToDisk(const CBlock& block, CDiskBlockPos& pos, const CMessageHeader::MessageStartChars& messageStart)
 {
-    const int64_t metrics_start = ibdmetrics::Enabled() ? ibdmetrics::Now() : 0;
     // Open history file to append
     CAutoFile fileout(OpenBlockFile(pos), SER_DISK, CLIENT_VERSION);
     if (fileout.IsNull())
@@ -1102,8 +1101,6 @@ static bool WriteBlockToDisk(const CBlock& block, CDiskBlockPos& pos, const CMes
         return error("WriteBlockToDisk: ftell failed");
     pos.nPos = (unsigned int)fileOutPos;
     fileout << block;
-
-    if (metrics_start) ibdmetrics::RecordDiskWrite(ibdmetrics::Now() - metrics_start);
 
     return true;
 }
@@ -2279,16 +2276,14 @@ void static UpdateTip(const CBlockIndex *pindexNew, const CChainParams& chainPar
             DoWarning(strWarning);
         }
     }
-    if (!ibdmetrics::Enabled()) {
-        LogPrintf("%s: new best=%s height=%d version=0x%08x log2_work=%.8g tx=%lu date='%s' progress=%f cache=%.1fMiB(%utxo)", __func__,
-          pindexNew->GetBlockHash().ToString(), pindexNew->nHeight, pindexNew->nVersion,
-          log(pindexNew->nChainWork.getdouble())/log(2.0), (unsigned long)pindexNew->nChainTx,
-          DateTimeStrFormat("%Y-%m-%d %H:%M:%S", pindexNew->GetBlockTime()),
-          GuessVerificationProgress(chainParams.TxData(), pindexNew), pcoinsTip->DynamicMemoryUsage() * (1.0 / (1<<20)), pcoinsTip->GetCacheSize());
-        if (!warningMessages.empty())
-            LogPrintf(" warning='%s'", boost::algorithm::join(warningMessages, ", "));
-        LogPrintf("\n");
-    }
+    LogPrintf("%s: new best=%s height=%d version=0x%08x log2_work=%.8g tx=%lu date='%s' progress=%f cache=%.1fMiB(%utxo)", __func__,
+      pindexNew->GetBlockHash().ToString(), pindexNew->nHeight, pindexNew->nVersion,
+      log(pindexNew->nChainWork.getdouble())/log(2.0), (unsigned long)pindexNew->nChainTx,
+      DateTimeStrFormat("%Y-%m-%d %H:%M:%S", pindexNew->GetBlockTime()),
+      GuessVerificationProgress(chainParams.TxData(), pindexNew), pcoinsTip->DynamicMemoryUsage() * (1.0 / (1<<20)), pcoinsTip->GetCacheSize());
+    if (!warningMessages.empty())
+        LogPrintf(" warning='%s'", boost::algorithm::join(warningMessages, ", "));
+    LogPrintf("\n");
 
 }
 
@@ -2427,7 +2422,6 @@ public:
  */
 bool CChainState::ConnectTip(CValidationState& state, const CChainParams& chainparams, CBlockIndex* pindexNew, const std::shared_ptr<const CBlock>& pblock, ConnectTrace& connectTrace, DisconnectedBlockTransactions &disconnectpool)
 {
-    const int64_t metrics_start = ibdmetrics::Enabled() ? ibdmetrics::Now() : 0;
     assert(pindexNew->pprev == chainActive.Tip());
     // Read block from disk.
     int64_t nTime1 = GetTimeMicros();
@@ -2478,7 +2472,6 @@ bool CChainState::ConnectTip(CValidationState& state, const CChainParams& chainp
     LogPrint(BCLog::BENCH, "- Connect block: %.2fms [%.2fs (%.2fms/blk)]\n", (nTime6 - nTime1) * MILLI, nTimeTotal * MICRO, nTimeTotal * MILLI / nBlocksTotal);
 
     connectTrace.BlockConnected(pindexNew, std::move(pthisBlock));
-    if (metrics_start) ibdmetrics::RecordConnected(ibdmetrics::Now() - metrics_start);
     return true;
 }
 
@@ -3078,22 +3071,10 @@ static bool CheckProofOfWorkMeasured(const CBlockHeader& block, const Consensus:
         if (!warned.exchange(true, std::memory_order_relaxed)) {
             LogPrintf("WARNING: fast IBD mode is skipping proof-of-work checks for historical blocks; use -verify-ibd=1 to audit all stored blocks later\n");
         }
-        ibdmetrics::RecordPowSkipped();
         return true;
     }
 
-    if (!ibdmetrics::Enabled())
-        return CheckProofOfWork(block.GetPoWHash_cached(), block.nBits, consensusParams);
-
-    bool cache_hit;
-    {
-        LOCK(block.cache_lock);
-        cache_hit = block.cache_init;
-    }
-    const int64_t start = ibdmetrics::Now();
-    const bool valid = CheckProofOfWork(block.GetPoWHash_cached(), block.nBits, consensusParams);
-    ibdmetrics::RecordPow(cache_hit, ibdmetrics::Now() - start);
-    return valid;
+    return CheckProofOfWork(block.GetPoWHash_cached(), block.nBits, consensusParams);
 }
 
 static bool CheckBlockHeader(const CBlockHeader& block, CValidationState& state, const Consensus::Params& consensusParams, bool fCheckPOW = true)
@@ -4219,10 +4200,35 @@ bool CChainState::RewindBlockIndex(const CChainParams& params)
         // rewind all the way.  Blocks remaining on chainActive at this point
         // must not have their validity reduced.
         if (IsWitnessEnabled(pindexIter->pprev, params.GetConsensus()) && !(pindexIter->nStatus & BLOCK_OPT_WITNESS) && !chainActive.Contains(pindexIter)) {
+            unsigned int newStatus = std::min<unsigned int>(pindexIter->nStatus & BLOCK_VALID_MASK, BLOCK_VALID_TREE) |
+                                     (pindexIter->nStatus & ~BLOCK_VALID_MASK);
+            newStatus &= ~(BLOCK_HAVE_DATA | BLOCK_HAVE_UNDO);
+
+            /**
+             * Only nStatus and nTx from the fields reset below are serialized
+             * by CDiskBlockIndex. nFile/nDataPos/nUndoPos are serialized only
+             * while their corresponding BLOCK_HAVE_* bit is set, and
+             * nChainTx/nSequenceId are memory-only fields.
+             *
+             * RewindBlockIndex runs on every normal startup and scans every
+             * entry in mapBlockIndex. Most old non-active entries have already
+             * been downgraded to BLOCK_VALID_TREE, have their BLOCK_HAVE_DATA
+             * and BLOCK_HAVE_UNDO bits cleared, and have nTx set to zero by a
+             * previous run. Unconditionally inserting those entries into
+             * setDirtyBlockIndex made the final FLUSH_STATE_ALWAYS rewrite all
+             * of them even though their serialized representation was
+             * unchanged. On a block index containing tens of millions of old
+             * entries, that redundant LevelDB batch can take minutes.
+             *
+             * Compare the serialized state before changing the in-memory
+             * fields. The in-memory cleanup and candidate/unlinked-map cleanup
+             * below must still run on every startup, but a database write is
+             * necessary only if nStatus or nTx actually changes.
+             */
+            const bool diskStateChanged = pindexIter->nStatus != newStatus || pindexIter->nTx != 0;
+
             // Reduce validity
-            pindexIter->nStatus = std::min<unsigned int>(pindexIter->nStatus & BLOCK_VALID_MASK, BLOCK_VALID_TREE) | (pindexIter->nStatus & ~BLOCK_VALID_MASK);
-            // Remove have-data flags.
-            pindexIter->nStatus &= ~(BLOCK_HAVE_DATA | BLOCK_HAVE_UNDO);
+            pindexIter->nStatus = newStatus;
             // Remove storage location.
             pindexIter->nFile = 0;
             pindexIter->nDataPos = 0;
@@ -4231,8 +4237,11 @@ bool CChainState::RewindBlockIndex(const CChainParams& params)
             pindexIter->nTx = 0;
             pindexIter->nChainTx = 0;
             pindexIter->nSequenceId = 0;
-            // Make sure it gets written.
-            setDirtyBlockIndex.insert(pindexIter);
+            // Preserve crash consistency for newly downgraded entries while
+            // avoiding writes for entries already persisted in this state.
+            if (diskStateChanged) {
+                setDirtyBlockIndex.insert(pindexIter);
+            }
             // Update indexes
             setBlockIndexCandidates.erase(pindexIter);
             std::pair<std::multimap<CBlockIndex*, CBlockIndex*>::iterator, std::multimap<CBlockIndex*, CBlockIndex*>::iterator> ret = mapBlocksUnlinked.equal_range(pindexIter->pprev);
