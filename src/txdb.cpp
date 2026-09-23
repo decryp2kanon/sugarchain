@@ -16,8 +16,6 @@
 
 #include <stdint.h>
 
-#include <fstream>
-
 #include <boost/thread.hpp>
 
 static const char DB_COIN = 'C';
@@ -31,21 +29,6 @@ static const char DB_HEAD_BLOCKS = 'H';
 static const char DB_FLAG = 'F';
 static const char DB_REINDEX_FLAG = 'R';
 static const char DB_LAST_BLOCK = 'l';
-
-#ifdef __linux__
-static uint64_t ReadProcStatusKiB(const char* field)
-{
-    std::ifstream status("/proc/self/status");
-    std::string line;
-    const std::string prefix = std::string(field) + ":";
-    while (std::getline(status, line)) {
-        if (line.compare(0, prefix.size(), prefix) == 0) {
-            return strtoull(line.c_str() + prefix.size(), nullptr, 10);
-        }
-    }
-    return 0;
-}
-#endif
 
 namespace {
 
@@ -279,9 +262,6 @@ bool CBlockTreeDB::ReadFlag(const std::string &name, bool &fValue) {
 bool CBlockTreeDB::LoadBlockIndexGuts(const Consensus::Params& consensusParams, std::function<CBlockIndex*(const uint256&)> insertBlockIndex)
 {
     std::unique_ptr<CDBIterator> pcursor(NewIterator());
-    const int64_t load_start = GetTimeMillis();
-    int64_t last_memory_log = load_start;
-    uint64_t loaded = 0;
 
     pcursor->Seek(std::make_pair(DB_BLOCK_INDEX, uint256()));
 
@@ -319,19 +299,6 @@ bool CBlockTreeDB::LoadBlockIndexGuts(const Consensus::Params& consensusParams, 
                 //    return error("%s: CheckProofOfWork failed: %s", __func__, pindexNew->ToString());
 
                 pcursor->Next();
-                ++loaded;
-
-#ifdef __linux__
-                const int64_t now = GetTimeMillis();
-                if (now - last_memory_log >= 5000) {
-                    const uint64_t rss_kib = ReadProcStatusKiB("VmRSS");
-                    const uint64_t peak_kib = ReadProcStatusKiB("VmHWM");
-                    LogPrintf("Block index load: loaded=%d RSS=%.1f MiB PeakRSS=%.1f MiB elapsed=%.1fs\n",
-                              loaded, rss_kib / 1024.0, peak_kib / 1024.0,
-                              (now - load_start) / 1000.0);
-                    last_memory_log = now;
-                }
-#endif
             } else {
                 return error("%s: failed to read value", __func__);
             }
@@ -339,14 +306,6 @@ bool CBlockTreeDB::LoadBlockIndexGuts(const Consensus::Params& consensusParams, 
             break;
         }
     }
-
-#ifdef __linux__
-    const uint64_t rss_kib = ReadProcStatusKiB("VmRSS");
-    const uint64_t peak_kib = ReadProcStatusKiB("VmHWM");
-    LogPrintf("Block index load complete: loaded=%d RSS=%.1f MiB PeakRSS=%.1f MiB elapsed=%.1fs\n",
-              loaded, rss_kib / 1024.0, peak_kib / 1024.0,
-              (GetTimeMillis() - load_start) / 1000.0);
-#endif
 
     return true;
 }

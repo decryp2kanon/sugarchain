@@ -297,34 +297,6 @@ enum FlushStateMode {
     FLUSH_STATE_ALWAYS
 };
 
-static const int64_t IBDSTALL_SLOW_VALIDATION_OPERATION_US = 100000;
-
-static void LogIBDSlowValidationOperation(const char* operation, int64_t elapsed, int height, bool enabled)
-{
-    if (enabled && elapsed >= IBDSTALL_SLOW_VALIDATION_OPERATION_US) {
-        LogPrintf("IBDSTALL slow operation=%s height=%d elapsed_ms=%.3f\n",
-                  operation, height, elapsed / 1000.0);
-    }
-}
-
-class IBDStallValidationOperationTimer
-{
-private:
-    const char* const m_operation;
-    const int64_t m_start;
-    const int m_height;
-    const bool m_enabled;
-
-public:
-    IBDStallValidationOperationTimer(const char* operation, int64_t start, int height, bool enabled) :
-        m_operation(operation), m_start(start), m_height(height), m_enabled(enabled) {}
-
-    ~IBDStallValidationOperationTimer()
-    {
-        LogIBDSlowValidationOperation(m_operation, GetTimeMicros() - m_start, m_height, m_enabled);
-    }
-};
-
 // See definition for documentation
 static bool FlushStateToDisk(const CChainParams& chainParams, CValidationState &state, FlushStateMode mode, int nManualPruneHeight=0);
 static void FindFilesToPruneManual(std::set<int>& setFilesToPrune, int nManualPruneHeight);
@@ -1114,7 +1086,6 @@ bool GetTransaction(const uint256& hash, CTransactionRef& txOut, const Consensus
 
 static bool WriteBlockToDisk(const CBlock& block, CDiskBlockPos& pos, const CMessageHeader::MessageStartChars& messageStart)
 {
-    const int64_t start = GetTimeMicros();
     // Open history file to append
     CAutoFile fileout(OpenBlockFile(pos), SER_DISK, CLIENT_VERSION);
     if (fileout.IsNull())
@@ -1130,11 +1101,6 @@ static bool WriteBlockToDisk(const CBlock& block, CDiskBlockPos& pos, const CMes
         return error("WriteBlockToDisk: ftell failed");
     pos.nPos = (unsigned int)fileOutPos;
     fileout << block;
-
-    const int64_t elapsed = GetTimeMicros() - start;
-    if (elapsed >= IBDSTALL_SLOW_VALIDATION_OPERATION_US) {
-        LogIBDSlowValidationOperation("WriteBlockToDisk", elapsed, -1, IsInitialBlockDownload());
-    }
 
     return true;
 }
@@ -1758,7 +1724,6 @@ static bool FindUndoPos(CValidationState &state, int nFile, CDiskBlockPos &pos, 
 
 static bool WriteUndoDataForBlock(const CBlockUndo& blockundo, CValidationState& state, CBlockIndex* pindex, const CChainParams& chainparams)
 {
-    const int64_t start = GetTimeMicros();
     // Write undo information to disk
     if (pindex->GetUndoPos().IsNull()) {
         CDiskBlockPos _pos;
@@ -1771,11 +1736,6 @@ static bool WriteUndoDataForBlock(const CBlockUndo& blockundo, CValidationState&
         pindex->nUndoPos = _pos.nPos;
         pindex->nStatus |= BLOCK_HAVE_UNDO;
         setDirtyBlockIndex.insert(pindex);
-    }
-
-    const int64_t elapsed = GetTimeMicros() - start;
-    if (elapsed >= IBDSTALL_SLOW_VALIDATION_OPERATION_US) {
-        LogIBDSlowValidationOperation("WriteUndoDataForBlock", elapsed, pindex->nHeight, IsInitialBlockDownload());
     }
 
     return true;
@@ -2141,12 +2101,8 @@ bool CChainState::ConnectBlock(const CBlock& block, CValidationState& state, CBl
  * or always and in all cases if we're in prune mode and are deleting files.
  */
 bool static FlushStateToDisk(const CChainParams& chainparams, CValidationState &state, FlushStateMode mode, int nManualPruneHeight) {
-    const int64_t flushStateStart = GetTimeMicros();
     int64_t nMempoolUsage = mempool.DynamicMemoryUsage();
     LOCK(cs_main);
-    const bool ibd = IsInitialBlockDownload();
-    const int diagnosticHeight = chainActive.Height();
-    IBDStallValidationOperationTimer ibdTimer("FlushStateToDisk", flushStateStart, diagnosticHeight, ibd);
     static int64_t nLastWrite = 0;
     static int64_t nLastFlush = 0;
     static int64_t nLastSetChain = 0;
@@ -2202,9 +2158,7 @@ bool static FlushStateToDisk(const CChainParams& chainparams, CValidationState &
             if (!CheckDiskSpace(0))
                 return state.Error("out of disk space");
             // First make sure all block and undo data is flushed to disk.
-            const int64_t flushBlockFileStart = GetTimeMicros();
             FlushBlockFile();
-            LogIBDSlowValidationOperation("FlushBlockFile", GetTimeMicros() - flushBlockFileStart, diagnosticHeight, ibd);
             // Then update all block file information (which may refer to block and undo files).
             {
                 std::vector<std::pair<int, const CBlockFileInfo*> > vFiles;
@@ -2219,10 +2173,7 @@ bool static FlushStateToDisk(const CChainParams& chainparams, CValidationState &
                     vBlocks.push_back(*it);
                     setDirtyBlockIndex.erase(it++);
                 }
-                const int64_t writeBatchStart = GetTimeMicros();
-                const bool writeBatchResult = pblocktree->WriteBatchSync(vFiles, nLastBlockFile, vBlocks);
-                LogIBDSlowValidationOperation("BlockIndexWriteBatchSync", GetTimeMicros() - writeBatchStart, diagnosticHeight, ibd);
-                if (!writeBatchResult) {
+                if (!pblocktree->WriteBatchSync(vFiles, nLastBlockFile, vBlocks)) {
                     return AbortNode(state, "Failed to write to block index database");
                 }
             }
@@ -2241,10 +2192,7 @@ bool static FlushStateToDisk(const CChainParams& chainparams, CValidationState &
             if (!CheckDiskSpace(48 * 2 * 2 * pcoinsTip->GetCacheSize()))
                 return state.Error("out of disk space");
             // Flush the chainstate (which may refer to block index entries).
-            const int64_t coinsFlushStart = GetTimeMicros();
-            const bool coinsFlushResult = pcoinsTip->Flush();
-            LogIBDSlowValidationOperation("CoinsFlush", GetTimeMicros() - coinsFlushStart, diagnosticHeight, ibd);
-            if (!coinsFlushResult)
+            if (!pcoinsTip->Flush())
                 return AbortNode(state, "Failed to write to coin database");
             nLastFlush = nNow;
         }
@@ -2478,7 +2426,6 @@ public:
 bool CChainState::ConnectTip(CValidationState& state, const CChainParams& chainparams, CBlockIndex* pindexNew, const std::shared_ptr<const CBlock>& pblock, ConnectTrace& connectTrace, DisconnectedBlockTransactions &disconnectpool)
 {
     assert(pindexNew->pprev == chainActive.Tip());
-    const bool ibd = IsInitialBlockDownload();
     // Read block from disk.
     int64_t nTime1 = GetTimeMicros();
     std::shared_ptr<const CBlock> pthisBlock;
@@ -2495,7 +2442,6 @@ bool CChainState::ConnectTip(CValidationState& state, const CChainParams& chainp
     int64_t nTime2 = GetTimeMicros(); nTimeReadFromDisk += nTime2 - nTime1;
     int64_t nTime3;
     LogPrint(BCLog::BENCH, "  - Load block from disk: %.2fms [%.2fs]\n", (nTime2 - nTime1) * MILLI, nTimeReadFromDisk * MICRO);
-    LogIBDSlowValidationOperation("ConnectTip.ReadBlock", nTime2 - nTime1, pindexNew->nHeight, ibd);
     {
         CCoinsViewCache view(pcoinsTip.get());
         bool rv = ConnectBlock(blockConnecting, state, pindexNew, view, chainparams);
@@ -2507,19 +2453,16 @@ bool CChainState::ConnectTip(CValidationState& state, const CChainParams& chainp
         }
         nTime3 = GetTimeMicros(); nTimeConnectTotal += nTime3 - nTime2;
         LogPrint(BCLog::BENCH, "  - Connect total: %.2fms [%.2fs (%.2fms/blk)]\n", (nTime3 - nTime2) * MILLI, nTimeConnectTotal * MICRO, nTimeConnectTotal * MILLI / nBlocksTotal);
-        LogIBDSlowValidationOperation("ConnectTip.ConnectBlock", nTime3 - nTime2, pindexNew->nHeight, ibd);
         bool flushed = view.Flush();
         assert(flushed);
     }
     int64_t nTime4 = GetTimeMicros(); nTimeFlush += nTime4 - nTime3;
     LogPrint(BCLog::BENCH, "  - Flush: %.2fms [%.2fs (%.2fms/blk)]\n", (nTime4 - nTime3) * MILLI, nTimeFlush * MICRO, nTimeFlush * MILLI / nBlocksTotal);
-    LogIBDSlowValidationOperation("ConnectTip.CoinsCacheFlush", nTime4 - nTime3, pindexNew->nHeight, ibd);
     // Write the chain state to disk, if necessary.
     if (!FlushStateToDisk(chainparams, state, FLUSH_STATE_IF_NEEDED))
         return false;
     int64_t nTime5 = GetTimeMicros(); nTimeChainState += nTime5 - nTime4;
     LogPrint(BCLog::BENCH, "  - Writing chainstate: %.2fms [%.2fs (%.2fms/blk)]\n", (nTime5 - nTime4) * MILLI, nTimeChainState * MICRO, nTimeChainState * MILLI / nBlocksTotal);
-    LogIBDSlowValidationOperation("ConnectTip.FlushStateToDisk", nTime5 - nTime4, pindexNew->nHeight, ibd);
     // Remove conflicting transactions from the mempool.;
     mempool.removeForBlock(blockConnecting.vtx, pindexNew->nHeight);
     disconnectpool.removeForBlock(blockConnecting.vtx);
@@ -2530,7 +2473,6 @@ bool CChainState::ConnectTip(CValidationState& state, const CChainParams& chainp
     int64_t nTime6 = GetTimeMicros(); nTimePostConnect += nTime6 - nTime5; nTimeTotal += nTime6 - nTime1;
     LogPrint(BCLog::BENCH, "  - Connect postprocess: %.2fms [%.2fs (%.2fms/blk)]\n", (nTime6 - nTime5) * MILLI, nTimePostConnect * MICRO, nTimePostConnect * MILLI / nBlocksTotal);
     LogPrint(BCLog::BENCH, "- Connect block: %.2fms [%.2fs (%.2fms/blk)]\n", (nTime6 - nTime1) * MILLI, nTimeTotal * MICRO, nTimeTotal * MILLI / nBlocksTotal);
-    LogIBDSlowValidationOperation("ConnectTip", nTime6 - nTime1, pindexNew->nHeight, ibd);
 
     connectTrace.BlockConnected(pindexNew, std::move(pthisBlock));
     return true;
@@ -2720,7 +2662,6 @@ static bool NotifyHeaderTip() {
  * that is already loaded (to avoid loading it again from disk).
  */
 bool CChainState::ActivateBestChain(CValidationState &state, const CChainParams& chainparams, std::shared_ptr<const CBlock> pblock) {
-    const int64_t activateBestChainStart = GetTimeMicros();
     // Note that while we're often called here from ProcessNewBlock, this is
     // far from a guarantee. Things in the P2P/RPC will often end up calling
     // us in the middle of ProcessNewBlock - do not assume pblock is set
@@ -2732,9 +2673,6 @@ bool CChainState::ActivateBestChain(CValidationState &state, const CChainParams&
     // during large connects - and to allow for e.g. the callback queue to drain
     // we use m_cs_chainstate to enforce mutual exclusion so that only one caller may execute this function at a time
     LOCK(m_cs_chainstate);
-    const bool ibd = IsInitialBlockDownload();
-    LogIBDSlowValidationOperation("ActivateBestChain.chainstate_lock_wait", GetTimeMicros() - activateBestChainStart, -1, ibd);
-    IBDStallValidationOperationTimer ibdTimer("ActivateBestChain", activateBestChainStart, -1, ibd);
 
     CBlockIndex *pindexMostWork = nullptr;
     CBlockIndex *pindexNewTip = nullptr;
@@ -2750,9 +2688,7 @@ bool CChainState::ActivateBestChain(CValidationState &state, const CChainParams&
         }
 
         {
-            const int64_t csMainWaitStart = GetTimeMicros();
             LOCK(cs_main);
-            LogIBDSlowValidationOperation("ActivateBestChain.cs_main_wait", GetTimeMicros() - csMainWaitStart, chainActive.Height(), ibd);
             CBlockIndex* starting_tip = chainActive.Tip();
             bool blocks_connected = false;
             do {
