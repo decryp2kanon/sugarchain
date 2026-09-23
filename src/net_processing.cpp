@@ -2905,7 +2905,9 @@ bool PeerLogicValidation::ProcessMessages(CNode* pfrom, std::atomic<bool>& inter
         LOCK(pfrom->cs_vProcessMsg);
         if (pfrom->vProcessMsg.empty())
             return false;
-        // Just take one message
+        // Process messages in receive order. Scanning the entire queue for a
+        // HEADERS message on every call becomes quadratic when a deep IBD
+        // block pipeline leaves thousands of BLOCK messages queued.
         msgs.splice(msgs.begin(), pfrom->vProcessMsg, pfrom->vProcessMsg.begin());
         pfrom->nProcessQueueSize -= msgs.front().vRecv.size() + CMessageHeader::HEADER_SIZE;
         pfrom->fPauseRecv = pfrom->nProcessQueueSize > connman->GetReceiveFloodSize();
@@ -3232,8 +3234,19 @@ bool PeerLogicValidation::SendMessages(CNode* pto, std::atomic<bool>& interruptM
             pindexBestHeader = chainActive.Tip();
         bool fFetch = state.fPreferredDownload || (nPreferredDownload == 0 && !pto->fClient && !pto->fOneShot); // Download if this is a nice peer, or we have no nice peers and this one might do.
         if (!state.fSyncStarted && !pto->fClient && !fImporting && !fReindex) {
-            // Only actively request headers from a single peer, unless we're close to today.
-            if ((nSyncStarted == 0 && fFetch) || pindexBestHeader->GetBlockTime() > GetAdjustedTime() - 24 * 60 * 60) {
+            /**
+             * During IBD, keep header synchronization active on every preferred
+             * download peer. SugarChain can process blocks quickly enough to catch
+             * a shallow header horizon, so relying on a single header-sync peer can
+             * leave the block download pipeline temporarily starved.
+             *
+             * Multiple preferred peers provide independent header pipelines.
+             * Duplicate headers are harmless and the normal header validation path
+             * still applies. Outside IBD, retain the original single-peer behavior.
+             */
+            if ((IsInitialBlockDownload() && fFetch) ||
+                (nSyncStarted == 0 && fFetch) ||
+                pindexBestHeader->GetBlockTime() > GetAdjustedTime() - 24 * 60 * 60) {
                 state.fSyncStarted = true;
                 state.nHeadersSyncTimeout = GetTimeMicros() + HEADERS_DOWNLOAD_TIMEOUT_BASE + HEADERS_DOWNLOAD_TIMEOUT_PER_HEADER * (GetAdjustedTime() - pindexBestHeader->GetBlockTime())/(consensusParams.nPowTargetSpacing);
                 nSyncStarted++;
@@ -3537,6 +3550,23 @@ bool PeerLogicValidation::SendMessages(CNode* pto, std::atomic<bool>& interruptM
 
         // Detect whether we're stalling
         nNow = GetTimeMicros();
+
+        // During IBD, a slow peer holding the block at the front of the
+        // download window can temporarily prevent the window from advancing.
+        // Release one stalled request before the full peer-disconnect timeout
+        // so another peer can request it. MarkBlockAsReceived() is also used
+        // for timed-out requests and keeps all in-flight accounting consistent.
+        static const int64_t BLOCK_STALL_REASSIGN_TIMEOUT = 5;
+        if (IsInitialBlockDownload() &&
+            state.nStallingSince &&
+            state.nStallingSince < nNow - 1000000 * BLOCK_STALL_REASSIGN_TIMEOUT &&
+            !state.vBlocksInFlight.empty()) {
+            const uint256 stalledHash = state.vBlocksInFlight.front().hash;
+            LogPrintf("Reassigning stalled block %s from peer=%d\n",
+                      stalledHash.ToString(), pto->GetId());
+            MarkBlockAsReceived(stalledHash);
+        }
+
         if (state.nStallingSince && state.nStallingSince < nNow - 1000000 * BLOCK_STALLING_TIMEOUT) {
             // Stalling only triggers when the block download window cannot move. During normal steady state,
             // the download window should be much larger than the to-be-downloaded set of blocks, so disconnection
@@ -3608,7 +3638,41 @@ bool PeerLogicValidation::SendMessages(CNode* pto, std::atomic<bool>& interruptM
         if (!pto->fClient && (fFetch || !IsInitialBlockDownload()) && state.nBlocksInFlight < MAX_BLOCKS_IN_TRANSIT_PER_PEER) {
             std::vector<const CBlockIndex*> vToDownload;
             NodeId staller = -1;
-            FindNextBlocksToDownload(pto->GetId(), MAX_BLOCKS_IN_TRANSIT_PER_PEER - state.nBlocksInFlight, vToDownload, staller, consensusParams);
+
+            /*
+            * Limit the number of blocks assigned to a peer in a single
+            * SendMessages() scheduling round during Initial Block Download.
+            *
+            * A large MAX_BLOCKS_IN_TRANSIT_PER_PEER improves throughput by
+            * keeping more block requests in flight. However, assigning the whole
+            * available window to one peer can reduce download parallelism by
+            * leaving other peers with no pending block requests.
+            *
+            * Keep the large in-flight window, but cap per-round assignments so
+            * multiple peers have an opportunity to participate in block download.
+            *
+            * This only affects scheduling fairness and does not reduce the total
+            * block download window.
+            */
+
+            // Limit only the amount of NEW work assigned in this scheduling pass.
+            // Do not turn this fairness batch into an accumulated per-peer cap:
+            // repeated passes may continue filling a peer all the way to
+            // MAX_BLOCKS_IN_TRANSIT_PER_PEER.
+            //
+            // Keep the batch deliberately smaller than the download window so
+            // the first peer processed by SendMessages() cannot normally claim
+            // the entire currently available range before other peers are
+            // scheduled.
+            const unsigned int BLOCK_DOWNLOAD_BATCH_LIMIT =
+                std::max(1024u, static_cast<unsigned int>(MAX_BLOCKS_IN_TRANSIT_PER_PEER / 16));
+
+            const unsigned int nBlocksToRequest =
+                std::min(static_cast<unsigned int>(MAX_BLOCKS_IN_TRANSIT_PER_PEER - state.nBlocksInFlight),
+                        BLOCK_DOWNLOAD_BATCH_LIMIT);
+
+            FindNextBlocksToDownload(pto->GetId(), nBlocksToRequest,
+                                     vToDownload, staller, consensusParams);
             for (const CBlockIndex *pindex : vToDownload) {
                 uint32_t nFetchFlags = GetFetchFlags(pto);
                 vGetData.push_back(CInv(MSG_BLOCK | nFetchFlags, pindex->GetBlockHash()));

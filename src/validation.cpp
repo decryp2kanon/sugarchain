@@ -1104,9 +1104,20 @@ static bool WriteBlockToDisk(const CBlock& block, CDiskBlockPos& pos, const CMes
     return true;
 }
 
-bool ReadBlockFromDisk(CBlock& block, const CDiskBlockPos& pos, const Consensus::Params& consensusParams)
+// expectedHash and cachedPowHash are local snapshots, never live index fields.
+// A cached hash is usable only for the exact header read from disk.
+static bool ReadBlockFromDiskInternal(CBlock& block, const CDiskBlockPos& pos,
+                                     const Consensus::Params& consensusParams,
+                                     const uint256* expectedHash, const uint256* cachedPowHash)
 {
     block.SetNull();
+    {
+        LOCK(block.cache_lock);
+        // CBlock::SetNull() does not reset the object-local PoW cache.
+        block.cache_init = false;
+        block.cache_block_hash.SetNull();
+        block.cache_PoW_hash.SetNull();
+    }
 
     // Open history file to read
     CAutoFile filein(OpenBlockFile(pos, true), SER_DISK, CLIENT_VERSION);
@@ -1121,6 +1132,18 @@ bool ReadBlockFromDisk(CBlock& block, const CDiskBlockPos& pos, const Consensus:
         return error("%s: Deserialize or I/O error - %s at %s", __func__, e.what(), pos.ToString());
     }
 
+    if (expectedHash) {
+        const uint256 actualHash = block.GetHash();
+        if (actualHash != *expectedHash)
+            return error("ReadBlockFromDisk: Header hash doesn't match index at %s", pos.ToString());
+        if (cachedPowHash) {
+            LOCK(block.cache_lock);
+            block.cache_block_hash = actualHash;
+            block.cache_PoW_hash = *cachedPowHash;
+            block.cache_init = true;
+        }
+    }
+
     // Check the header
     if (!CheckProofOfWork(block.GetPoWHash_cached(), block.nBits, consensusParams))
         return error("ReadBlockFromDisk: Errors in block header at %s", pos.ToString());
@@ -1128,20 +1151,27 @@ bool ReadBlockFromDisk(CBlock& block, const CDiskBlockPos& pos, const Consensus:
     return true;
 }
 
+bool ReadBlockFromDisk(CBlock& block, const CDiskBlockPos& pos, const Consensus::Params& consensusParams)
+{
+    // Without a trusted index snapshot, retain the normal PoW calculation.
+    return ReadBlockFromDiskInternal(block, pos, consensusParams, nullptr, nullptr);
+}
+
 bool ReadBlockFromDisk(CBlock& block, const CBlockIndex* pindex, const Consensus::Params& consensusParams)
 {
     CDiskBlockPos blockPos;
+    uint256 expectedHash, cachedPowHash;
+    bool haveCachedPow = false;
     {
         LOCK(cs_main);
         blockPos = pindex->GetBlockPos();
+        expectedHash = pindex->GetBlockHash();
+        haveCachedPow = pindex->cache_init && pindex->cache_block_hash == expectedHash;
+        if (haveCachedPow) cachedPowHash = pindex->cache_PoW_hash;
     }
 
-    if (!ReadBlockFromDisk(block, blockPos, consensusParams))
-        return false;
-    if (block.GetHash() != pindex->GetBlockHash())
-        return error("ReadBlockFromDisk(CBlock&, CBlockIndex*): GetHash() doesn't match index for %s at %s",
-                pindex->ToString(), pindex->GetBlockPos().ToString());
-    return true;
+    return ReadBlockFromDiskInternal(block, blockPos, consensusParams,
+                                     &expectedHash, haveCachedPow ? &cachedPowHash : nullptr);
 }
 
 CAmount GetBlockSubsidy(int nHeight, const Consensus::Params& consensusParams)
@@ -3527,11 +3557,12 @@ bool ProcessNewBlock(const CChainParams& chainparams, const std::shared_ptr<cons
         if (miSelf != mapBlockIndex.end()) {
             // Block header is already known
             pindex = miSelf->second;
-            if (!pblock->cache_init && pindex->cache_init) {
-                LOCK(pblock->cache_lock); // Probably unnecessary since no concurrent access to pblock is expected
-                pblock->cache_init = true;
+            LOCK(pblock->cache_lock);
+            if (!pblock->cache_init && pindex->cache_init &&
+                pindex->cache_block_hash == hash && pindex->GetBlockHash() == hash) {
                 pblock->cache_block_hash = pindex->cache_block_hash;
                 pblock->cache_PoW_hash = pindex->cache_PoW_hash;
+                pblock->cache_init = true;
             }
         }
     }
@@ -3553,6 +3584,16 @@ bool ProcessNewBlock(const CChainParams& chainparams, const std::shared_ptr<cons
         if (!ret) {
             GetMainSignals().BlockChecked(*pblock, state);
             return error("%s: AcceptBlock FAILED (%s)", __func__, state.GetDebugMessage());
+        }
+        // Publish only a checked block's matching PoW result, under cs_main.
+        // The cache is memory-only and does not mark the block chain-valid.
+        if (pindex && pblock->fChecked && pindex->GetBlockHash() == hash) {
+            LOCK(pblock->cache_lock);
+            if (pblock->cache_init && pblock->cache_block_hash == hash) {
+                pindex->cache_block_hash = hash;
+                pindex->cache_PoW_hash = pblock->cache_PoW_hash;
+                pindex->cache_init = true;
+            }
         }
     }
 
