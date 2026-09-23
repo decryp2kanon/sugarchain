@@ -189,6 +189,10 @@ struct CNodeState {
     int64_t nDownloadingSince;
     int nBlocksInFlight;
     int nBlocksInFlightValidHeaders;
+    int64_t nIBDDeliverySampleStart;
+    unsigned int nIBDBlocksDelivered;
+    double dIBDBlockDeliveryRate;
+    int64_t nIBDBalanceLogTime;
     //! Whether we consider this a preferred download peer.
     bool fPreferredDownload;
     //! Whether this peer wants invs or headers (when possible) for block announcements.
@@ -256,6 +260,10 @@ struct CNodeState {
         nDownloadingSince = 0;
         nBlocksInFlight = 0;
         nBlocksInFlightValidHeaders = 0;
+        nIBDDeliverySampleStart = 0;
+        nIBDBlocksDelivered = 0;
+        dIBDBlockDeliveryRate = 0;
+        nIBDBalanceLogTime = 0;
         fPreferredDownload = false;
         fPreferHeaders = false;
         fPreferHeaderAndIDs = false;
@@ -508,6 +516,31 @@ bool MarkBlockAsInFlight(NodeId nodeid, const uint256& hash, const CBlockIndex* 
     if (pit)
         *pit = &itInFlight->second.second;
     return true;
+}
+
+// Requires cs_main. Track the effective delivery rate of blocks requested
+// from this peer without changing or duplicating any in-flight request.
+void RecordBlockDelivery(NodeId nodeid, const uint256& hash) {
+    const auto itInFlight = mapBlocksInFlight.find(hash);
+    if (itInFlight == mapBlocksInFlight.end() || itInFlight->second.first != nodeid) return;
+
+    CNodeState* state = State(nodeid);
+    assert(state != nullptr);
+    const int64_t now = GetTimeMicros();
+    if (state->nIBDDeliverySampleStart == 0) {
+        state->nIBDDeliverySampleStart = now;
+    }
+    ++state->nIBDBlocksDelivered;
+
+    const int64_t elapsed = now - state->nIBDDeliverySampleStart;
+    if (elapsed >= 1000000) {
+        const double sampleRate = state->nIBDBlocksDelivered * 1000000.0 / elapsed;
+        state->dIBDBlockDeliveryRate = state->dIBDBlockDeliveryRate == 0
+            ? sampleRate
+            : state->dIBDBlockDeliveryRate * 0.75 + sampleRate * 0.25;
+        state->nIBDDeliverySampleStart = now;
+        state->nIBDBlocksDelivered = 0;
+    }
 }
 
 /** Check whether the last unknown block a peer advertised is not yet known. */
@@ -2759,6 +2792,7 @@ bool static ProcessMessage(CNode* pfrom, const std::string& strCommand, CDataStr
             LOCK(cs_main);
             // Also always process if we requested the block explicitly, as we may
             // need it even though it is not a candidate for a new best tip.
+            RecordBlockDelivery(pfrom->GetId(), hash);
             forceProcessing |= MarkBlockAsReceived(hash);
             // mapBlockSource is only used for sending reject messages and DoS scores,
             // so the race between here and cs_main in ProcessNewBlock is fine.
@@ -3793,27 +3827,43 @@ bool PeerLogicValidation::SendMessages(CNode* pto, std::atomic<bool>& interruptM
             pindexBestHeader->GetBlockTime() > GetAdjustedTime() -
                 consensusParams.nPowTargetSpacing * HEADER_SYNC_TIP_THRESHOLD;
         static const unsigned int MAX_IBD_BLOCKS_IN_FLIGHT_PER_PEER = 2000;
-        static const unsigned int IBD_BLOCKS_IN_FLIGHT_REFILL_THRESHOLD = 1000;
+        static const unsigned int MIN_IBD_BLOCKS_IN_FLIGHT_PER_PEER = 128;
+        static const unsigned int IBD_DELIVERY_TARGET_SECONDS = 2;
+        static const unsigned int IBD_CRITICAL_RANGE_BATCH_LIMIT = 256;
         const unsigned int nBlocksInFlightLimit = fInitialBlockDownload
             ? MAX_IBD_BLOCKS_IN_FLIGHT_PER_PEER
             : MAX_BLOCKS_IN_TRANSIT_PER_PEER;
+        const unsigned int nIBDDeliveryTarget = std::max(
+            MIN_IBD_BLOCKS_IN_FLIGHT_PER_PEER,
+            std::min(MAX_IBD_BLOCKS_IN_FLIGHT_PER_PEER,
+                     static_cast<unsigned int>(state.dIBDBlockDeliveryRate * IBD_DELIVERY_TARGET_SECONDS)));
+        const unsigned int nBlocksInFlightTarget = fInitialBlockDownload
+            ? nIBDDeliveryTarget
+            : nBlocksInFlightLimit;
+        const unsigned int nIBDRequestBatch = std::min(
+            IBD_CRITICAL_RANGE_BATCH_LIMIT,
+            std::max(1u, nIBDDeliveryTarget / 2));
+        const unsigned int nIBDRefillThreshold = nIBDDeliveryTarget - nIBDRequestBatch;
+        if (fInitialBlockDownload && nNow - state.nIBDBalanceLogTime >= 5000000) {
+            LogPrintf("IBDSTALL balance peer=%d delivery_rate=%.2f target=%u batch=%u inflight=%d\n",
+                      pto->GetId(), state.dIBDBlockDeliveryRate,
+                      nIBDDeliveryTarget, nIBDRequestBatch, state.nBlocksInFlight);
+            state.nIBDBalanceLogTime = nNow;
+        }
         /**
-         * Refill a deep-IBD peer's request queue only after half of its
-         * in-flight allowance has drained.  FindNextBlocksToDownload walks a
+         * Refill a deep-IBD peer's request queue after one bounded request
+         * batch has drained. FindNextBlocksToDownload walks a
          * download window of up to BLOCK_DOWNLOAD_WINDOW entries, skipping
-         * blocks which are already present or assigned to another peer.  With
-         * a 2,000-block per-peer limit, invoking it whenever the count fell to
-         * 1,999 repeatedly scanned that large window merely to replace a
-         * handful of completed requests.  Measurements attributed more than
-         * 99 percent of SendMessages time to those repeated searches.
+         * blocks which are already present or assigned to another peer.
          *
-         * Keeping 1,000 requests in flight still provides a deep network
-         * pipeline, while refilling back toward 2,000 amortizes one search over
-         * as many as 1,000 new assignments.  Outside IBD, preserve the original
-         * behavior and refill as soon as any normal in-flight slot is free.
+         * Fast peers can still use the full 2,000-block allowance, but no peer
+         * receives more than 256 consecutive new assignments in one round.
+         * Slow or not-yet-measured peers receive only about two seconds of
+         * work. Outside IBD, preserve the original behavior and refill as soon
+         * as any normal in-flight slot is free.
          */
         const bool fRefillBlockRequests = fInitialBlockDownload
-            ? state.nBlocksInFlight <= IBD_BLOCKS_IN_FLIGHT_REFILL_THRESHOLD
+            ? static_cast<unsigned int>(state.nBlocksInFlight) <= nIBDRefillThreshold
             : state.nBlocksInFlight < nBlocksInFlightLimit;
         if (!pto->fClient && (fFetch || !fInitialBlockDownload) &&
             (!fInitialBlockDownload || fHeadersSynced) &&
@@ -3848,8 +3898,8 @@ bool PeerLogicValidation::SendMessages(CNode* pto, std::atomic<bool>& interruptM
                     MAX_BLOCKS_IN_TRANSIT_PER_PEER / BLOCK_DOWNLOAD_BATCH_DIVISOR));
 
             const unsigned int nBlocksToRequest =
-                std::min(static_cast<unsigned int>(nBlocksInFlightLimit - state.nBlocksInFlight),
-                        BLOCK_DOWNLOAD_BATCH_LIMIT);
+                std::min(static_cast<unsigned int>(nBlocksInFlightTarget - state.nBlocksInFlight),
+                        fInitialBlockDownload ? nIBDRequestBatch : BLOCK_DOWNLOAD_BATCH_LIMIT);
 
             FindNextBlocksToDownload(pto->GetId(), nBlocksToRequest,
                                      vToDownload, staller, consensusParams);
