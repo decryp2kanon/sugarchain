@@ -12,6 +12,7 @@
 #include <chainparams.h>
 #include <consensus/validation.h>
 #include <hash.h>
+#include <ibd_metrics.h>
 #include <init.h>
 #include <validation.h>
 #include <merkleblock.h>
@@ -2609,6 +2610,7 @@ bool static ProcessMessage(CNode* pfrom, const std::string& strCommand, CDataStr
     {
         std::shared_ptr<CBlock> pblock = std::make_shared<CBlock>();
         vRecv >> *pblock;
+        ibdmetrics::RecordReceived();
 
         LogPrint(BCLog::NET, "received block %s peer=%d\n", pblock->GetHash().ToString(), pfrom->GetId());
 
@@ -3664,8 +3666,10 @@ bool PeerLogicValidation::SendMessages(CNode* pto, std::atomic<bool>& interruptM
             // the first peer processed by SendMessages() cannot normally claim
             // the entire currently available range before other peers are
             // scheduled.
+            static const unsigned int BLOCK_DOWNLOAD_BATCH_DIVISOR = 256;
             const unsigned int BLOCK_DOWNLOAD_BATCH_LIMIT =
-                std::max(1024u, static_cast<unsigned int>(MAX_BLOCKS_IN_TRANSIT_PER_PEER / 16));
+                std::max(1u, static_cast<unsigned int>(
+                    MAX_BLOCKS_IN_TRANSIT_PER_PEER / BLOCK_DOWNLOAD_BATCH_DIVISOR));
 
             const unsigned int nBlocksToRequest =
                 std::min(static_cast<unsigned int>(MAX_BLOCKS_IN_TRANSIT_PER_PEER - state.nBlocksInFlight),
