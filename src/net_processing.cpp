@@ -190,7 +190,7 @@ struct CNodeState {
     int nBlocksInFlightValidHeaders;
     int64_t nIBDDeliverySampleStart;
     unsigned int nIBDBlocksDelivered;
-    double dIBDBlockDeliveryRate;
+    double dIBDBlockDeliveryRateEstimate;
     //! Whether we consider this a preferred download peer.
     bool fPreferredDownload;
     //! Whether this peer wants invs or headers (when possible) for block announcements.
@@ -260,7 +260,7 @@ struct CNodeState {
         nBlocksInFlightValidHeaders = 0;
         nIBDDeliverySampleStart = 0;
         nIBDBlocksDelivered = 0;
-        dIBDBlockDeliveryRate = 0;
+        dIBDBlockDeliveryRateEstimate = 0;
         fPreferredDownload = false;
         fPreferHeaders = false;
         fPreferHeaderAndIDs = false;
@@ -394,9 +394,9 @@ void RecordBlockDelivery(NodeId nodeid, const uint256& hash) {
     const int64_t elapsed = now - state->nIBDDeliverySampleStart;
     if (elapsed >= 1000000) {
         const double sampleRate = state->nIBDBlocksDelivered * 1000000.0 / elapsed;
-        state->dIBDBlockDeliveryRate = state->dIBDBlockDeliveryRate == 0
+        state->dIBDBlockDeliveryRateEstimate = state->dIBDBlockDeliveryRateEstimate == 0
             ? sampleRate
-            : state->dIBDBlockDeliveryRate * 0.75 + sampleRate * 0.25;
+            : state->dIBDBlockDeliveryRateEstimate * 0.75 + sampleRate * 0.25;
         state->nIBDDeliverySampleStart = now;
         state->nIBDBlocksDelivered = 0;
     }
@@ -3675,7 +3675,7 @@ bool PeerLogicValidation::SendMessages(CNode* pto, std::atomic<bool>& interruptM
         const unsigned int nIBDDeliveryTarget = std::max(
             MIN_IBD_BLOCKS_IN_FLIGHT_PER_PEER,
             std::min(MAX_IBD_BLOCKS_IN_FLIGHT_PER_PEER,
-                     static_cast<unsigned int>(state.dIBDBlockDeliveryRate * IBD_DELIVERY_TARGET_SECONDS)));
+                     static_cast<unsigned int>(state.dIBDBlockDeliveryRateEstimate * IBD_DELIVERY_TARGET_SECONDS)));
         const unsigned int nBlocksInFlightTarget = fInitialBlockDownload
             ? nIBDDeliveryTarget
             : nBlocksInFlightLimit;
