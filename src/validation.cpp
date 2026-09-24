@@ -3092,18 +3092,15 @@ static bool IsTrustedFastIBDBlock(const CBlockHeader& block, const CChainParams&
 static bool CheckBlockHeader(const CBlockHeader& block, CValidationState& state, const Consensus::Params& consensusParams, bool fCheckPOW = true)
 {
     // Check proof of work matches claimed amount
-    if (fCheckPOW && !CheckProofOfWork(block.GetPoWHash_cached(), block.nBits, consensusParams))
-        return state.DoS(50, false, REJECT_INVALID, "high-hash", false, "proof of work failed");
-
-    return true;
-}
-
-static bool CheckBlockHeaderFastIBD(const CBlockHeader& block, CValidationState& state, const Consensus::Params& consensusParams, bool fCheckPOW = true)
-{
-    // Full blocks have already been checked explicitly by ProcessNewBlock().
-    // Preserve the checkpoint-based IBD shortcut for their redundant check.
     if (fCheckPOW && !CheckProofOfWorkMeasured(block, consensusParams))
         return state.DoS(50, false, REJECT_INVALID, "high-hash", false, "proof of work failed");
+
+    // FIXME.SUGAR // check PoW: SKIPPED during downloading headers (IBD)
+    // You can see this log when IBD.
+    // This means PoW check during IBD is not actually skipped, but still its checking in another places.
+    // What we skipped is only when Downloading headers, but not else. This makes IBD much faster.
+    // if (IsInitialBlockDownload())
+    //     printf("%s IBD=%d CBH=%s\n", DateTimeStrFormat("%Y-%m-%d %H:%M:%S", GetTime()).c_str(), IsInitialBlockDownload(), block.GetHash().ToString().c_str());
 
     return true;
 }
@@ -3115,9 +3112,10 @@ bool CheckBlock(const CBlock& block, CValidationState& state, const Consensus::P
     if (block.fChecked)
         return true;
 
-    // This is redundant with AcceptBlockHeader for received blocks. Preserve
-    // the existing fast-IBD behavior for this full-block validation pass.
-    if (!CheckBlockHeaderFastIBD(block, state, consensusParams, fCheckPOW))
+    // FIXME.SUGAR // check PoW: SKIPPED during downloading headers (IBD)
+    // Check that the header is valid (particularly PoW).  This is mostly
+    // redundant with the call in AcceptBlockHeader, but when IBD mode, its SKIPPED.
+    if (!CheckBlockHeader(block, state, consensusParams, fCheckPOW))
         return false;
 
     // Check the merkle root.
@@ -3397,8 +3395,8 @@ bool CChainState::AcceptBlockHeader(const CBlockHeader& block, CValidationState&
             return true;
         }
 
-        // Header chains always prove their claimed work, independently of the
-        // checkpoint-based fast path used later for trusted full blocks.
+        // The measured path skips Yespower for fast IBD. With -fast-ibd=0,
+        // reindex/import, or normal operation it performs full validation.
         if (!CheckBlockHeader(block, state, chainparams.GetConsensus()))
             return error("%s: Consensus::CheckBlockHeader: %s, %s", __func__, hash.ToString(), FormatStateMessage(state));
 
