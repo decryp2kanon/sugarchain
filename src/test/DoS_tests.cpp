@@ -54,6 +54,13 @@ BOOST_FIXTURE_TEST_SUITE(DoS_tests, TestingSetup)
 // work.
 BOOST_AUTO_TEST_CASE(outbound_slow_chain_eviction)
 {
+    // Exercise ordinary full-PoW sync; checkpoint presync has separate
+    // progress deadlines tested with the P2P checkpoint tests.
+    struct RestoreFastIBD {
+        std::string previous{gArgs.GetArg("-fast-ibd", "1")};
+        ~RestoreFastIBD() { gArgs.ForceSetArg("-fast-ibd", previous); }
+    } restore_fast_ibd;
+    gArgs.ForceSetArg("-fast-ibd", "0");
     std::atomic<bool> interruptDummy(false);
 
     // Mock an outbound peer

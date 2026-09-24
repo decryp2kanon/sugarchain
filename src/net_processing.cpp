@@ -10,6 +10,7 @@
 #include <arith_uint256.h>
 #include <blockencodings.h>
 #include <chainparams.h>
+#include <checkpoints.h>
 #include <consensus/validation.h>
 #include <hash.h>
 #include <init.h>
@@ -179,6 +180,11 @@ struct CNodeState {
     int nUnconnectingHeaders;
     //! Whether we've started headers synchronization with this peer.
     bool fSyncStarted;
+    // Sparse, peer-local first-pass commitments. Unauthenticated headers never
+    // enter mapBlockIndex, best-header selection, or block download scheduling.
+    std::shared_ptr<Checkpoints::HeaderSync> checkpoint_sync;
+    int64_t checkpoint_sync_deadline{0};
+    int64_t checkpoint_sync_progress_deadline{0};
     //! When to potentially disconnect peer for stalling headers download
     int64_t nHeadersSyncTimeout;
     //! Since when we're stalling block download progress (in microseconds), or 0.
@@ -1303,10 +1309,58 @@ inline void static SendBlockTransactions(const CBlock& block, const BlockTransac
     connman->PushMessage(pfrom, msgMaker.Make(nSendFlags, NetMsgType::BLOCKTXN, resp));
 }
 
-bool static ProcessHeadersMessage(CNode *pfrom, CConnman *connman, const std::vector<CBlockHeader>& headers, const CChainParams& chainparams, bool punish_duplicate_invalid)
+static bool NeedsCheckpointHeaderSync(const CChainParams& chainparams)
 {
+    AssertLockHeld(cs_main);
+    const auto& checkpoints = chainparams.Checkpoints().mapCheckpoints;
+    return gArgs.GetBoolArg("-fast-ibd", true) && fCheckpointsEnabled &&
+           !checkpoints.empty() && !mapBlockIndex.count(checkpoints.rbegin()->second);
+}
+
+bool static ProcessHeadersMessage(CNode *pfrom, CConnman *connman, const std::vector<CBlockHeader>& incoming_headers, const CChainParams& chainparams, bool punish_duplicate_invalid)
+{
+    std::vector<CBlockHeader> headers(incoming_headers);
+    std::shared_ptr<Checkpoints::HeaderSync> checkpoint_sync;
     const CNetMsgMaker msgMaker(pfrom->GetSendVersion());
     size_t nCount = headers.size();
+
+    {
+        LOCK(cs_main);
+        auto* nodestate = State(pfrom->GetId());
+        checkpoint_sync = nodestate->checkpoint_sync;
+        // We did not request these historical headers from this peer. Let the
+        // sole presync session authenticate history instead of allowing other
+        // peers' announcements to trigger redundant bulk Yespower work.
+        if (!checkpoint_sync && NeedsCheckpointHeaderSync(chainparams)) return true;
+        if (checkpoint_sync) {
+            // Concurrent tip announcements can be unrelated to our outstanding
+            // historical request. Ignore those; a nonconnecting bulk response
+            // or an incomplete terminal response terminates this sync peer.
+            if (!headers.empty() && headers.size() < MAX_BLOCKS_TO_ANNOUNCE &&
+                headers.front().hashPrevBlock != checkpoint_sync->NextHash()) return true;
+            const bool was_replaying = checkpoint_sync->Replaying();
+            const int previous_height = checkpoint_sync->Height();
+            if (!checkpoint_sync->Process(incoming_headers, headers)) {
+                LogPrintf("Checkpoint header authentication failed, disconnecting peer=%d\n", pfrom->GetId());
+                nodestate->checkpoint_sync.reset();
+                pfrom->fDisconnect = true;
+                return false;
+            }
+            // Bound stalls independently of the much larger historical-header
+            // timeout. Valid progress may continue, but cannot grow the index.
+            nodestate->checkpoint_sync_progress_deadline = std::min<int64_t>(nodestate->checkpoint_sync_deadline, GetTime() + 60);
+            if (was_replaying == checkpoint_sync->Replaying() && previous_height / 100000 != checkpoint_sync->Height() / 100000)
+                LogPrintf("Checkpoint header %s height=%d peer=%d\n", was_replaying ? "replay" : "presync", checkpoint_sync->Height(), pfrom->GetId());
+            if (!was_replaying && checkpoint_sync->Replaying())
+                LogPrintf("Checkpoint header commitments authenticated; replaying peer=%d\n", pfrom->GetId());
+            if (headers.empty()) {
+                connman->PushMessage(pfrom, msgMaker.Make(NetMsgType::GETHEADERS,
+                    CBlockLocator({checkpoint_sync->NextHash(), chainparams.GetConsensus().hashGenesisBlock}), checkpoint_sync->StopHash()));
+                return true;
+            }
+            nCount = headers.size();
+        }
+    }
 
     if (nCount == 0) {
         // Nothing interesting. Stop asking this peers for more headers.
@@ -1364,7 +1418,7 @@ bool static ProcessHeadersMessage(CNode *pfrom, CConnman *connman, const std::ve
 
     CValidationState state;
     CBlockHeader first_invalid_header;
-    if (!ProcessNewBlockHeaders(headers, state, chainparams, &pindexLast, &first_invalid_header)) {
+    if (!ProcessNewBlockHeaders(headers, state, chainparams, &pindexLast, &first_invalid_header, checkpoint_sync.get())) {
         int nDoS;
         if (state.IsInvalid(nDoS)) {
             LOCK(cs_main);
@@ -1428,7 +1482,19 @@ bool static ProcessHeadersMessage(CNode *pfrom, CConnman *connman, const std::ve
             nodestate->m_last_block_announcement = GetTime();
         }
 
-        if (nCount == MAX_HEADERS_RESULTS && received_new_header) {
+        if (checkpoint_sync) {
+            if (checkpoint_sync->Complete()) {
+                nodestate->checkpoint_sync.reset();
+                LogPrintf("Checkpoint header replay complete at height=%d peer=%d\n", pindexLast->nHeight, pfrom->GetId());
+                // Continue with real PoW verification beyond the checkpoint.
+                connman->PushMessage(pfrom, msgMaker.Make(NetMsgType::GETHEADERS, chainActive.GetLocator(pindexLast), uint256()));
+                nodestate->nHeadersSyncTimeout = GetTimeMicros() + HEADERS_DOWNLOAD_TIMEOUT_BASE +
+                    HEADERS_DOWNLOAD_TIMEOUT_PER_HEADER * std::max<int64_t>(0, GetAdjustedTime() - pindexLast->GetBlockTime()) / chainparams.GetConsensus().nPowTargetSpacing;
+            } else {
+                connman->PushMessage(pfrom, msgMaker.Make(NetMsgType::GETHEADERS,
+                    CBlockLocator({checkpoint_sync->NextHash(), chainparams.GetConsensus().hashGenesisBlock}), checkpoint_sync->StopHash()));
+            }
+        } else if (nCount == MAX_HEADERS_RESULTS && received_new_header) {
             // Headers message had its maximum size; the peer may have more headers.
             // TODO: optimize: if pindexLast is an ancestor of chainActive.Tip or pindexBestHeader, continue
             // from there instead.
@@ -1918,7 +1984,7 @@ bool static ProcessMessage(CNode* pfrom, const std::string& strCommand, CDataStr
 
             if (inv.type == MSG_BLOCK) {
                 UpdateBlockAvailability(pfrom->GetId(), inv.hash);
-                if (!fAlreadyHave && !fImporting && !fReindex && !mapBlocksInFlight.count(inv.hash)) {
+                if (!fAlreadyHave && !fImporting && !fReindex && !NeedsCheckpointHeaderSync(chainparams) && !mapBlocksInFlight.count(inv.hash)) {
                     // We used to request the full block here, but since headers-announcements are now the
                     // primary method of announcement on the network, and since, in the case that a node
                     // fell back to inv we probably have a reorg which we should get the headers for first,
@@ -3045,6 +3111,9 @@ void PeerLogicValidation::ConsiderEviction(CNode *pto, int64_t time_in_seconds)
 
     CNodeState &state = *State(pto->GetId());
     const CNetMsgMaker msgMaker(pto->GetSendVersion());
+    // Quarantine intentionally has no indexed chainwork yet, and is governed
+    // by its own progress/absolute deadlines. Do not send a competing locator.
+    if (state.checkpoint_sync) return;
 
     if (!state.m_chain_sync.m_protect && IsOutboundDisconnectionCandidate(pto) && state.fSyncStarted) {
         // This is an outbound peer subject to disconnection if they don't
@@ -3280,23 +3349,39 @@ bool PeerLogicValidation::SendMessages(CNode* pto, std::atomic<bool>& interruptM
             // During deep IBD, synchronize headers from one preferred peer at a
             // time. This avoids downloading and processing the same historical
             // header ranges concurrently from every preferred peer.
+            const auto& checkpoints = Params().Checkpoints();
+            const bool need_checkpoint_sync = NeedsCheckpointHeaderSync(Params());
             if ((nSyncStarted == 0 && fFetch) ||
-                pindexBestHeader->GetBlockTime() > GetAdjustedTime() - 24 * 60 * 60) {
+                (!need_checkpoint_sync && pindexBestHeader->GetBlockTime() > GetAdjustedTime() - 24 * 60 * 60)) {
                 state.fSyncStarted = true;
                 state.nHeadersSyncTimeout = GetTimeMicros() + HEADERS_DOWNLOAD_TIMEOUT_BASE + HEADERS_DOWNLOAD_TIMEOUT_PER_HEADER * (GetAdjustedTime() - pindexBestHeader->GetBlockTime())/(consensusParams.nPowTargetSpacing);
                 nSyncStarted++;
-                const CBlockIndex *pindexStart = pindexBestHeader;
-                /* If possible, start at the block preceding the currently
-                   best known header.  This ensures that we always get a
-                   non-empty list of headers back as long as the peer
-                   is up-to-date.  With a non-empty response, we can initialise
-                   the peer's known best block.  This wouldn't be possible
-                   if we requested starting at pindexBestHeader and
-                   got back an empty response.  */
-                if (pindexStart->pprev)
-                    pindexStart = pindexStart->pprev;
-                LogPrint(BCLog::NET, "initial getheaders (%d) to peer=%d (startheight:%d)\n", pindexStart->nHeight, pto->GetId(), pto->nStartingHeight);
-                connman->PushMessage(pto, msgMaker.Make(NetMsgType::GETHEADERS, chainActive.GetLocator(pindexStart), uint256()));
+                if (need_checkpoint_sync) {
+                    const CBlockIndex* start = Checkpoints::GetLastCheckpoint(checkpoints);
+                    if (!start) start = chainActive.Genesis();
+                    if (start && start->nHeight < checkpoints.mapCheckpoints.rbegin()->first) {
+                        state.checkpoint_sync = std::make_shared<Checkpoints::HeaderSync>(start->nHeight, start->GetBlockHash(), checkpoints);
+                        state.checkpoint_sync_deadline = GetTime() + 4 * 60 * 60;
+                        state.checkpoint_sync_progress_deadline = GetTime() + 60;
+                        state.nHeadersSyncTimeout = std::numeric_limits<int64_t>::max();
+                        LogPrintf("Starting checkpoint header authentication from height=%d peer=%d\n", start->nHeight, pto->GetId());
+                        connman->PushMessage(pto, msgMaker.Make(NetMsgType::GETHEADERS, chainActive.GetLocator(start), state.checkpoint_sync->StopHash()));
+                    }
+                }
+                if (!state.checkpoint_sync) {
+                    const CBlockIndex *pindexStart = pindexBestHeader;
+                    /* If possible, start at the block preceding the currently
+                       best known header.  This ensures that we always get a
+                       non-empty list of headers back as long as the peer
+                       is up-to-date.  With a non-empty response, we can initialise
+                       the peer's known best block.  This wouldn't be possible
+                       if we requested starting at pindexBestHeader and
+                       got back an empty response.  */
+                    if (pindexStart->pprev)
+                        pindexStart = pindexStart->pprev;
+                    LogPrint(BCLog::NET, "initial getheaders (%d) to peer=%d (startheight:%d)\n", pindexStart->nHeight, pto->GetId(), pto->nStartingHeight);
+                    connman->PushMessage(pto, msgMaker.Make(NetMsgType::GETHEADERS, chainActive.GetLocator(pindexStart), uint256()));
+                }
             }
         }
 
@@ -3627,6 +3712,14 @@ bool PeerLogicValidation::SendMessages(CNode* pto, std::atomic<bool>& interruptM
                 return true;
             }
         }
+        // Quarantine sessions have their own progress and absolute deadlines,
+        // even when no alternative peer is available or a peer is whitelisted.
+        if (state.checkpoint_sync && GetTime() > state.checkpoint_sync_progress_deadline) {
+            LogPrintf("Timeout authenticating checkpoint headers, disconnecting peer=%d\n", pto->GetId());
+            state.checkpoint_sync.reset();
+            pto->fDisconnect = true;
+            return true;
+        }
         // Check for headers sync timeouts
         if (state.fSyncStarted && state.nHeadersSyncTimeout < std::numeric_limits<int64_t>::max()) {
             // Detect whether this is a stalling initial-headers-sync peer
@@ -3649,6 +3742,7 @@ bool PeerLogicValidation::SendMessages(CNode* pto, std::atomic<bool>& interruptM
                         // getheaders message to be sent to
                         // this peer (eventually).
                         state.fSyncStarted = false;
+                        state.checkpoint_sync.reset();
                         nSyncStarted--;
                         state.nHeadersSyncTimeout = 0;
                     }

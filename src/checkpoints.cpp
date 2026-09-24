@@ -10,9 +10,83 @@
 #include <validation.h>
 
 #include <stdint.h>
+#include <stdexcept>
 
 
 namespace Checkpoints {
+
+    HeaderSync::HeaderSync(int start_height, const uint256& start_hash, const CCheckpointData& checkpoints)
+        : m_start_height(start_height), m_start_hash(start_hash),
+          m_checkpoints(checkpoints.mapCheckpoints), m_height(start_height), m_prev(start_hash)
+    {
+        if (start_height < 0 || m_checkpoints.empty() || start_height >= m_checkpoints.rbegin()->first)
+            throw std::invalid_argument("invalid checkpoint header sync range");
+    }
+
+    bool HeaderSync::Process(const std::vector<CBlockHeader>& headers, std::vector<CBlockHeader>& authenticated)
+    {
+        authenticated.clear();
+        m_authenticated.clear();
+        if (m_failed || m_complete || headers.empty() || headers.size() > CHUNK_SIZE)
+            return false;
+        for (const auto& header : headers) {
+            if (header.hashPrevBlock != m_prev) {
+                m_failed = true;
+                break;
+            }
+            const uint256 hash = header.GetHash();
+            ++m_height;
+            const auto cp = m_checkpoints.find(m_height);
+            if (cp != m_checkpoints.end() && cp->second != hash) {
+                m_failed = true;
+                break;
+            }
+            m_prev = hash;
+            const bool at_end = m_height == m_checkpoints.rbegin()->first;
+            const bool at_chunk = (m_height - m_start_height) % CHUNK_SIZE == 0 || at_end;
+            if (!m_replaying) {
+                if (at_chunk) m_commitments.push_back(hash);
+                if (at_end) {
+                    // The endpoint commits to every first-pass header, including
+                    // all saved chunk endpoints. Discard trailing untrusted data.
+                    m_replaying = true;
+                    m_height = m_start_height;
+                    m_prev = m_start_hash;
+                    return true;
+                }
+            } else {
+                m_buffer.push_back(header);
+                if (at_chunk) {
+                    if (m_replay_chunk >= m_commitments.size() || hash != m_commitments[m_replay_chunk++]) {
+                        m_failed = true;
+                        break;
+                    }
+                    for (const auto& committed : m_buffer) {
+                        m_authenticated.insert(committed.GetHash());
+                        authenticated.push_back(committed);
+                    }
+                    m_buffer.clear();
+                }
+                if (at_end) {
+                    m_complete = true;
+                    return true;
+                }
+            }
+        }
+        if (m_failed) {
+            authenticated.clear();
+            m_authenticated.clear();
+            m_buffer.clear();
+            m_commitments.clear();
+        }
+        return !m_failed;
+    }
+
+    bool HeaderSync::Authenticates(const uint256& hash, const CCheckpointData& checkpoints) const
+    {
+        return !m_failed && m_replaying && m_checkpoints == checkpoints.mapCheckpoints &&
+               m_authenticated.count(hash) != 0;
+    }
 
     bool CheckBlock(int nHeight, const uint256& hash, const CCheckpointData& data)
     {

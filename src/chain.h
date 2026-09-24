@@ -174,6 +174,10 @@ enum BlockStatus: uint32_t {
     BLOCK_FAILED_CHILD       =   64, //!< descends from failed block
     BLOCK_FAILED_MASK        =   BLOCK_FAILED_VALID | BLOCK_FAILED_CHILD,
 
+    // Persisted evidence, separate from TREE validity. Never set from claimed
+    // chainwork, IBD state, or an unauthenticated first-pass header.
+    BLOCK_POW_CHECKED       =   256, //!< actual Yespower check succeeded
+    BLOCK_CHECKPOINT_CHECKED = 512, //!< header authenticated to a compiled-in checkpoint
     BLOCK_OPT_WITNESS       =   128, //!< block data in blk*.data was received with a witness-enforcing client
 };
 

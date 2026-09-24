@@ -149,7 +149,10 @@ bitcoin_test_check: $(TEST_BINARY) FORCE
 bitcoin_test_clean : FORCE
 	rm -f $(CLEAN_BITCOIN_TEST) $(test_test_bitcoin_OBJECTS) $(TEST_BINARY)
 
+# IBD latches false process-wide; run these security checks in fresh processes.
 check-local:
+	$(AM_V_at)$(TEST_BINARY) --run_test=validation_block_tests/fast_ibd_rejects_unproven_headers_and_disk_blocks
+	$(AM_V_at)$(TEST_BINARY) --run_test=validation_block_tests/processnewblock_checks_pow_during_ibd
 	@echo "Running test/util/bitcoin-util-test.py..."
 	$(PYTHON) $(top_builddir)/test/util/bitcoin-util-test.py
 	$(AM_V_at)$(MAKE) $(AM_MAKEFLAGS) -C secp256k1 check
