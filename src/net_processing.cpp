@@ -3715,35 +3715,11 @@ bool PeerLogicValidation::SendMessages(CNode* pto, std::atomic<bool>& interruptM
             std::vector<const CBlockIndex*> vToDownload;
             NodeId staller = -1;
 
-            /*
-            * Limit the number of blocks assigned to a peer in a single
-            * SendMessages() scheduling round during Initial Block Download.
-            *
-            * A large MAX_BLOCKS_IN_TRANSIT_PER_PEER improves throughput by
-            * keeping more block requests in flight. However, assigning the whole
-            * available window to one peer can reduce download parallelism by
-            * leaving other peers with no pending block requests.
-            *
-            * Keep a large aggregate in-flight window across peers, but cap both
-            * per-round assignments and each peer's accumulated IBD requests so
-            * multiple peers have an opportunity to participate in block download.
-            *
-            * This only affects scheduling fairness and does not reduce the total
-            * block download window.
-            */
-
-            // Keep the batch deliberately smaller than the download window so
-            // the first peer processed by SendMessages() cannot normally claim
-            // the entire currently available range before other peers are
-            // scheduled.
-            static const unsigned int BLOCK_DOWNLOAD_BATCH_DIVISOR = 64;
-            const unsigned int BLOCK_DOWNLOAD_BATCH_LIMIT =
-                std::max(1u, static_cast<unsigned int>(
-                    MAX_BLOCKS_IN_TRANSIT_PER_PEER / BLOCK_DOWNLOAD_BATCH_DIVISOR));
-
             const unsigned int nBlocksToRequest =
-                std::min(static_cast<unsigned int>(nBlocksInFlightTarget - state.nBlocksInFlight),
-                        fInitialBlockDownload ? nIBDRequestBatch : BLOCK_DOWNLOAD_BATCH_LIMIT);
+                fInitialBlockDownload
+                    ? std::min(static_cast<unsigned int>(nBlocksInFlightTarget - state.nBlocksInFlight),
+                               nIBDRequestBatch)
+                    : static_cast<unsigned int>(nBlocksInFlightTarget - state.nBlocksInFlight);
 
             FindNextBlocksToDownload(pto->GetId(), nBlocksToRequest,
                                      vToDownload, staller, consensusParams);
