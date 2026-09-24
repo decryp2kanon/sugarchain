@@ -3070,7 +3070,7 @@ static bool CheckProofOfWorkMeasured(const CBlockHeader& block, const Consensus:
         !fReindex && !fImporting && IsInitialBlockDownload()) {
         static std::atomic<bool> warned{false};
         if (!warned.exchange(true, std::memory_order_relaxed)) {
-            LogPrintf("WARNING: fast IBD mode is skipping proof-of-work checks for historical blocks; use -verify-ibd=1 to audit all stored blocks later\n");
+            LogPrintf("WARNING: fast IBD mode is skipping proof-of-work checks for checkpoint-committed historical blocks; use -fast-ibd=0 for full IBD proof-of-work validation\n");
         }
         return true;
     }
