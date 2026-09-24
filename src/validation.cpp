@@ -3556,9 +3556,19 @@ bool ProcessNewBlock(const CChainParams& chainparams, const std::shared_ptr<cons
         CBlockIndex *pindex = nullptr;
         if (fNewBlock) *fNewBlock = false;
         CValidationState state;
+        // Headers may skip the expensive Yespower check during IBD, and
+        // -fast-ibd may skip redundant checks while reading an already
+        // accepted block from disk.  A newly received block must nevertheless
+        // prove its claimed work before it can be accepted and connected.
+        bool ret = CheckProofOfWork(pblock->GetPoWHash_cached(), pblock->nBits, chainparams.GetConsensus());
+        if (!ret) {
+            state.DoS(50, false, REJECT_INVALID, "high-hash", false, "proof of work failed");
+        }
         // Ensure that CheckBlock() passes before calling AcceptBlock, as
         // belt-and-suspenders.
-        bool ret = CheckBlock(*pblock, state, chainparams.GetConsensus());
+        if (ret) {
+            ret = CheckBlock(*pblock, state, chainparams.GetConsensus());
+        }
 
         LOCK(cs_main);
 

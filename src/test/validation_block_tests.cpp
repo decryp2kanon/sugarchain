@@ -181,4 +181,27 @@ BOOST_AUTO_TEST_CASE(processnewblock_signals_ordering)
     BOOST_CHECK_EQUAL(sub.m_expected_tip, chainActive.Tip()->GetBlockHash());
 }
 
+BOOST_AUTO_TEST_CASE(processnewblock_checks_pow_during_ibd)
+{
+    auto pblock = Block(Params().GenesisBlock().GetHash());
+    pblock->hashMerkleRoot = BlockMerkleRoot(*pblock);
+
+    // Choose a nonce which does not satisfy the deliberately easy regtest
+    // target, so this test does not depend on any particular starting nonce.
+    while (CheckProofOfWork(pblock->GetPoWHash(), pblock->nBits, Params().GetConsensus())) {
+        ++pblock->nNonce;
+    }
+
+    // IsInitialBlockDownload() is process-global and latches false.  The full
+    // unit-test binary may have left IBD in an earlier suite; the focused test
+    // runs in a fresh process and exercises the fast-IBD path.
+    if (!IsInitialBlockDownload()) {
+        BOOST_TEST_MESSAGE("IBD already latched false; run this test case in isolation");
+        return;
+    }
+    bool new_block = false;
+    BOOST_CHECK(!ProcessNewBlock(Params(), pblock, true, &new_block));
+    BOOST_CHECK(!new_block);
+}
+
 BOOST_AUTO_TEST_SUITE_END()
