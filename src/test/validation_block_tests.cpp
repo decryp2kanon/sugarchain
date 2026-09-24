@@ -213,6 +213,28 @@ BOOST_AUTO_TEST_CASE(processnewblock_checks_pow_during_ibd)
     gArgs.ForceSetArg("-fast-ibd", "1");
 }
 
+BOOST_AUTO_TEST_CASE(headers_check_pow_during_fast_ibd)
+{
+    const auto check_invalid_pow = []() {
+        auto pblock = Block(Params().GenesisBlock().GetHash());
+        CBlockHeader header = pblock->GetBlockHeader();
+        while (CheckProofOfWork(header.GetPoWHash(), header.nBits, Params().GetConsensus())) {
+            ++header.nNonce;
+        }
+
+        CValidationState state;
+        BOOST_CHECK(!ProcessNewBlockHeaders({header}, state, Params()));
+        BOOST_CHECK_EQUAL(state.GetRejectReason(), "high-hash");
+    };
+
+    // Header PoW is mandatory in fast IBD mode as well as full validation mode.
+    gArgs.ForceSetArg("-fast-ibd", "1");
+    check_invalid_pow();
+    gArgs.ForceSetArg("-fast-ibd", "0");
+    check_invalid_pow();
+    gArgs.ForceSetArg("-fast-ibd", "1");
+}
+
 BOOST_AUTO_TEST_CASE(fast_ibd_checkpoint_trust_is_ancestry_bound)
 {
     uint256 hashes[4] = {uint256S("01"), uint256S("02"), uint256S("03"), uint256S("04")};
