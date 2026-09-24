@@ -462,7 +462,7 @@ std::string HelpMessage(HelpMessageMode mode)
     strUsage += HelpMessageOpt("-debug=<category>", strprintf(_("Output debugging information (default: %u, supplying <category> is optional)"), 0) + ". " +
         _("If <category> is not supplied or if <category> = 1, output all debugging information.") + " " + _("<category> can be:") + " " + ListLogCategories() + ".");
     strUsage += HelpMessageOpt("-debugexclude=<category>", strprintf(_("Exclude debugging information for a category. Can be used in conjunction with -debug=1 to output debug logs for all categories except one or more specified categories.")));
-    strUsage += HelpMessageOpt("-fast-ibd=<0|1>", _("Skip redundant proof-of-work checks while reading blocks already accepted during network IBD; newly received blocks, reindex, and block import always verify PoW (default: 1, enabled by default)"));
+    strUsage += HelpMessageOpt("-fast-ibd=<0|1>", _("Skip proof-of-work checks for network IBD blocks committed to by the last hard-coded checkpoint, and redundant disk-read checks; unknown chains, reindex, and block import always verify PoW (default: 1, enabled by default)"));
     strUsage += HelpMessageOpt("-verify-ibd=<0|1>", _("Verify every stored block and its proof of work without rebuilding the block index or chainstate; forces -checkblocks=0, -checklevel=1, and -fast-ibd=0 (default: 0)"));
     strUsage += HelpMessageOpt("-help-debug", _("Show all debugging options (usage: --help -help-debug)"));
     strUsage += HelpMessageOpt("-logips", strprintf(_("Include IP addresses in debug output (default: %u)"), DEFAULT_LOGIPS));

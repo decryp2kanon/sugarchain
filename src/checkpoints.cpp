@@ -14,6 +14,12 @@
 
 namespace Checkpoints {
 
+    bool CheckBlock(int nHeight, const uint256& hash, const CCheckpointData& data)
+    {
+        const auto i = data.mapCheckpoints.find(nHeight);
+        return i == data.mapCheckpoints.end() || hash == i->second;
+    }
+
     CBlockIndex* GetLastCheckpoint(const CCheckpointData& data)
     {
         const MapCheckpoints& checkpoints = data.mapCheckpoints;
@@ -26,6 +32,17 @@ namespace Checkpoints {
                 return t->second;
         }
         return nullptr;
+    }
+
+    bool IsAncestorOfLastCheckpoint(const CBlockIndex* pindex, const CCheckpointData& data)
+    {
+        if (pindex == nullptr)
+            return false;
+
+        const CBlockIndex* pcheckpoint = GetLastCheckpoint(data);
+        return pcheckpoint != nullptr &&
+               pindex->nHeight <= pcheckpoint->nHeight &&
+               pcheckpoint->GetAncestor(pindex->nHeight) == pindex;
     }
 
 } // namespace Checkpoints

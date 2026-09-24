@@ -5,6 +5,7 @@
 #include <boost/test/unit_test.hpp>
 
 #include <chainparams.h>
+#include <checkpoints.h>
 #include <consensus/merkle.h>
 #include <consensus/validation.h>
 #include <miner.h>
@@ -183,15 +184,6 @@ BOOST_AUTO_TEST_CASE(processnewblock_signals_ordering)
 
 BOOST_AUTO_TEST_CASE(processnewblock_checks_pow_during_ibd)
 {
-    auto pblock = Block(Params().GenesisBlock().GetHash());
-    pblock->hashMerkleRoot = BlockMerkleRoot(*pblock);
-
-    // Choose a nonce which does not satisfy the deliberately easy regtest
-    // target, so this test does not depend on any particular starting nonce.
-    while (CheckProofOfWork(pblock->GetPoWHash(), pblock->nBits, Params().GetConsensus())) {
-        ++pblock->nNonce;
-    }
-
     // IsInitialBlockDownload() is process-global and latches false.  The full
     // unit-test binary may have left IBD in an earlier suite; the focused test
     // runs in a fresh process and exercises the fast-IBD path.
@@ -199,9 +191,60 @@ BOOST_AUTO_TEST_CASE(processnewblock_checks_pow_during_ibd)
         BOOST_TEST_MESSAGE("IBD already latched false; run this test case in isolation");
         return;
     }
-    bool new_block = false;
-    BOOST_CHECK(!ProcessNewBlock(Params(), pblock, true, &new_block));
-    BOOST_CHECK(!new_block);
+
+    const auto check_invalid_pow = []() {
+        auto pblock = Block(Params().GenesisBlock().GetHash());
+        pblock->hashMerkleRoot = BlockMerkleRoot(*pblock);
+        while (CheckProofOfWork(pblock->GetPoWHash(), pblock->nBits, Params().GetConsensus())) {
+            ++pblock->nNonce;
+        }
+        bool new_block = false;
+        BOOST_CHECK(!ProcessNewBlock(Params(), pblock, true, &new_block));
+        BOOST_CHECK(!new_block);
+    };
+
+    // An untrusted block is rejected even when fast IBD is enabled.
+    gArgs.ForceSetArg("-fast-ibd", "1");
+    check_invalid_pow();
+
+    // Disabling fast IBD retains full proof-of-work validation during IBD.
+    gArgs.ForceSetArg("-fast-ibd", "0");
+    check_invalid_pow();
+    gArgs.ForceSetArg("-fast-ibd", "1");
+}
+
+BOOST_AUTO_TEST_CASE(fast_ibd_checkpoint_trust_is_ancestry_bound)
+{
+    uint256 hashes[4] = {uint256S("01"), uint256S("02"), uint256S("03"), uint256S("04")};
+    CBlockIndex root;
+    CBlockIndex trusted;
+    CBlockIndex anchor;
+    CBlockIndex fork;
+    root.phashBlock = &hashes[0];
+    trusted.phashBlock = &hashes[1];
+    trusted.pprev = &root;
+    trusted.nHeight = 1;
+    anchor.phashBlock = &hashes[2];
+    anchor.pprev = &trusted;
+    anchor.nHeight = 2;
+    fork.phashBlock = &hashes[3];
+    fork.pprev = &root;
+    fork.nHeight = 1;
+
+    CCheckpointData checkpoints{{{2, hashes[2]}}};
+    {
+        LOCK(cs_main);
+        mapBlockIndex.emplace(hashes[2], &anchor);
+        BOOST_CHECK(Checkpoints::IsAncestorOfLastCheckpoint(&root, checkpoints));
+        BOOST_CHECK(Checkpoints::IsAncestorOfLastCheckpoint(&trusted, checkpoints));
+        BOOST_CHECK(Checkpoints::IsAncestorOfLastCheckpoint(&anchor, checkpoints));
+        BOOST_CHECK(!Checkpoints::IsAncestorOfLastCheckpoint(&fork, checkpoints));
+        mapBlockIndex.erase(hashes[2]);
+    }
+
+    BOOST_CHECK(Checkpoints::CheckBlock(1, hashes[3], checkpoints));
+    BOOST_CHECK(Checkpoints::CheckBlock(2, hashes[2], checkpoints));
+    BOOST_CHECK(!Checkpoints::CheckBlock(2, hashes[3], checkpoints));
 }
 
 BOOST_AUTO_TEST_SUITE_END()

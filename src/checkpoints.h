@@ -19,8 +19,14 @@ struct CCheckpointData;
 namespace Checkpoints
 {
 
+//! Returns false when a block at a checkpoint height has the wrong hash.
+bool CheckBlock(int nHeight, const uint256& hash, const CCheckpointData& data);
+
 //! Returns last CBlockIndex* in mapBlockIndex that is a checkpoint
 CBlockIndex* GetLastCheckpoint(const CCheckpointData& data);
+
+//! Returns whether pindex is on the history committed to by the last known checkpoint.
+bool IsAncestorOfLastCheckpoint(const CBlockIndex* pindex, const CCheckpointData& data);
 
 } //namespace Checkpoints
 

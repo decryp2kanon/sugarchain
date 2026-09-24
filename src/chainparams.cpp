@@ -285,6 +285,8 @@ public:
                 {2601511, uint256S("e30af0fcf522354f43c3ab2cfb4805d175b1264608b6124eab0b635bdea2589d")}, // 2601511=2601001+510
                 {4422211, uint256S("1f4186606aaab3cb3818f073599602e573476da9fed0b65c9f14646210d6b18f")}, // 4422211=4421701+510
                 {6513497, uint256S("855f0c66238bc0246c8ca25cf958283fd49b9fb4b217ddeb518e5ea9f5071b9e")},
+                // This is also the block whose chainwork is nMinimumChainWork.
+                {37500000, uint256S("4637782372a194f62d0e01264d90bac655aa86d273459fcdc7c0bc27d1a0f867")},
                 // TODO.SUGAR.UPDATE
             }
         };

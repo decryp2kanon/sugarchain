@@ -3078,6 +3078,17 @@ static bool CheckProofOfWorkMeasured(const CBlockHeader& block, const Consensus:
     return CheckProofOfWork(block.GetPoWHash_cached(), block.nBits, consensusParams);
 }
 
+static bool IsTrustedFastIBDBlock(const CBlockHeader& block, const CChainParams& chainparams)
+{
+    if (!fCheckpointsEnabled)
+        return false;
+
+    LOCK(cs_main);
+    const auto it = mapBlockIndex.find(block.GetHash());
+    return it != mapBlockIndex.end() &&
+           Checkpoints::IsAncestorOfLastCheckpoint(it->second, chainparams.Checkpoints());
+}
+
 static bool CheckBlockHeader(const CBlockHeader& block, CValidationState& state, const Consensus::Params& consensusParams, bool fCheckPOW = true)
 {
     // Check proof of work matches claimed amount
@@ -3241,6 +3252,11 @@ static bool ContextualCheckBlockHeader(const CBlockHeader& block, CValidationSta
 
     // Check against checkpoints
     if (fCheckpointsEnabled) {
+        // Checkpoint heights must match exactly. This prevents an unverified
+        // header fork from manufacturing its own fast-IBD trust anchor.
+        if (!Checkpoints::CheckBlock(nHeight, block.GetHash(), params.Checkpoints()))
+            return state.DoS(100, error("%s: rejected by checkpoint lock-in at height %d", __func__, nHeight), REJECT_CHECKPOINT, "checkpoint mismatch");
+
         // Don't accept any forks from the main chain prior to last checkpoint.
         // GetLastCheckpoint finds the last checkpoint in MapCheckpoints that's in our
         // MapBlockIndex.
@@ -3379,9 +3395,9 @@ bool CChainState::AcceptBlockHeader(const CBlockHeader& block, CValidationState&
             return true;
         }
 
-        // FIXME.SUGAR // check PoW: SKIPPED during downloading headers (IBD)
-        // IBD: do not check PoW (Yespower) during Download headers for performance reason
-        if (!IsInitialBlockDownload() && !CheckBlockHeader(block, state, chainparams.GetConsensus()))
+        // The measured path skips Yespower for fast IBD. With -fast-ibd=0,
+        // reindex/import, or normal operation it performs full validation.
+        if (!CheckBlockHeader(block, state, chainparams.GetConsensus()))
             return error("%s: Consensus::CheckBlockHeader: %s, %s", __func__, hash.ToString(), FormatStateMessage(state));
 
         // Get prev block index
@@ -3556,11 +3572,13 @@ bool ProcessNewBlock(const CChainParams& chainparams, const std::shared_ptr<cons
         CBlockIndex *pindex = nullptr;
         if (fNewBlock) *fNewBlock = false;
         CValidationState state;
-        // Headers may skip the expensive Yespower check during IBD, and
-        // -fast-ibd may skip redundant checks while reading an already
-        // accepted block from disk.  A newly received block must nevertheless
-        // prove its claimed work before it can be accepted and connected.
-        bool ret = CheckProofOfWork(pblock->GetPoWHash_cached(), pblock->nBits, chainparams.GetConsensus());
+        // Only history cryptographically committed to by a hard-coded
+        // checkpoint may use the network fast path. Unknown chains, forks,
+        // and blocks after the anchor must prove their claimed work.
+        const bool skip_pow = gArgs.GetBoolArg("-fast-ibd", true) &&
+                              !fReindex && !fImporting && IsInitialBlockDownload() &&
+                              IsTrustedFastIBDBlock(*pblock, chainparams);
+        bool ret = skip_pow || CheckProofOfWork(pblock->GetPoWHash_cached(), pblock->nBits, chainparams.GetConsensus());
         if (!ret) {
             state.DoS(50, false, REJECT_INVALID, "high-hash", false, "proof of work failed");
         }
