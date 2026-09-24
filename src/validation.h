@@ -82,14 +82,9 @@ static const int MAX_SCRIPTCHECK_THREADS = 16;
 /** -par default (number of script-checking threads, 0 = auto) */
 static const int DEFAULT_SCRIPTCHECK_THREADS = 0;
 
-/** Number of blocks that can be requested at any given time from a single peer. */
-// FIXME.SUGAR
-// GetPoWHash_cached
-/** IBD: which sets MAX_BLOCKS_IN_TRANSIT_PER_PEER to be same as MAX_HEADERS_RESULTS.
- *  Without this change, at least in Resistance the block headers download would get unnecessarily
- *  far ahead of the full blocks download, resulting in more work lost and redone in case the
- *  initial blocks download is interrupted and continued.
- *  The work loss is because we do not yet store cached PoWs on disk. */
+/** Maximum number of blocks in flight from a single peer outside IBD.
+ *  Deep IBD uses an adaptive per-peer target capped separately by
+ *  MAX_IBD_BLOCKS_IN_FLIGHT_PER_PEER in net_processing.cpp. */
 static const int MAX_BLOCKS_IN_TRANSIT_PER_PEER = 2000; // (was 16)
 
 /** Timeout in seconds during which a peer must stall block download progress before being disconnected. */
@@ -102,13 +97,12 @@ static const unsigned int MAX_HEADERS_RESULTS = 2000;
 static const int MAX_CMPCTBLOCK_DEPTH = 5;
 /** Maximum depth of blocks we're willing to respond to GETBLOCKTXN requests for. */
 static const int MAX_BLOCKTXN_DEPTH = 10;
-/** Size of the "block download window": how far ahead of our current height do we fetch?
- *  Larger windows tolerate larger download speed differences between peer, but increase the potential
+/** Size of the block-download scheduling window beyond the last common block with a peer.
+ *  Larger windows tolerate larger download speed differences between peers, but increase the potential
  *  degree of disordering of blocks on disk (which make reindexing and pruning harder). We'll probably
  *  want to make this a per-peer adaptive value at some point. */
-// Keep the scheduling horizon large enough for high-throughput parallel IBD.
-// Per-peer and per-round assignment remain bounded separately so peers get
-// scheduling turns without changing the normal-operation in-flight limit.
+// This large IBD scheduling horizon is independent of the per-peer in-flight
+// limit and per-round assignment limit in net_processing.cpp.
 static const unsigned int BLOCK_DOWNLOAD_WINDOW = 122880;
 /** Time to wait (in seconds) between writing blocks/block index to disk. */
 static const unsigned int DATABASE_WRITE_INTERVAL = 60 * 60;
