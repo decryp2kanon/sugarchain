@@ -3097,6 +3097,42 @@ static bool CheckProofOfWorkMeasured(const CBlockHeader& block, const Consensus:
     return true;
 }
 
+namespace {
+struct HeaderPoWCheck {
+    const CBlockHeader* header{nullptr};
+    HeaderPoWCheck() = default;
+    explicit HeaderPoWCheck(const CBlockHeader* h) : header(h) {}
+    bool operator()() { header->GetPoWHash_cached(); return true; }
+    void swap(HeaderPoWCheck& other) { std::swap(header, other.header); }
+};
+CCheckQueue<HeaderPoWCheck> headerpowqueue(8);
+
+// Caller keeps headers alive until Wait finishes. Workers touch only object-local
+// caches, never cs_main, chainwork, validation flags, or the block index. Keeping
+// both the queue and each submission bounded avoids peer-controlled task growth.
+void PrecomputeHeaderPoW(const std::vector<CBlockHeader>& headers, const Consensus::Params& params,
+                         const Checkpoints::HeaderSync* proof = nullptr, const CCheckpointData* checkpoints = nullptr)
+{
+    AssertLockHeld(cs_main);
+    CCheckQueueControl<HeaderPoWCheck> control(&headerpowqueue);
+    std::vector<HeaderPoWCheck> jobs;
+    for (const auto& header : headers) {
+        if (HaveHeaderProof(header, params) ||
+            (proof && checkpoints && proof->Authenticates(header.GetHash(), *checkpoints))) continue;
+        // Invalid targets are cheap to reject in the ordered validation pass.
+        if (CheckProofOfWork(uint256(), header.nBits, params)) jobs.emplace_back(&header);
+    }
+    control.Add(jobs);
+    control.Wait();
+}
+} // namespace
+
+void ThreadHeaderPoWCheck()
+{
+    RenameThread("sugar-headerpow");
+    headerpowqueue.Thread();
+}
+
 static bool CheckBlockHeader(const CBlockHeader& block, CValidationState& state, const Consensus::Params& consensusParams, bool fCheckPOW = true)
 {
     // Check proof of work matches claimed amount
@@ -3447,6 +3483,28 @@ bool ProcessNewBlockHeaders(const std::vector<CBlockHeader>& headers, CValidatio
     {
         LOCK(cs_main);
         const bool use_checkpoint = gArgs.GetBoolArg("-fast-ibd", true) && fCheckpointsEnabled && !fReindex && !fImporting;
+        // Require a new valid header before spending parallel work on the
+        // rest of a bulk message. Otherwise one cheap invalid first header
+        // could force thousands of hashes on every replay of an attack batch.
+        if (gArgs.GetBoolArg("-fast-ibd", true) && headers.size() <= MAX_HEADERS_RESULTS &&
+            !headers.empty() && mapBlockIndex.count(headers.front().hashPrevBlock)) {
+            for (const auto& header : headers) {
+                if (HaveHeaderProof(header, chainparams.GetConsensus()) ||
+                    (use_checkpoint && checkpoint_sync && checkpoint_sync->Authenticates(header.GetHash(), chainparams.Checkpoints()))) continue;
+                const auto prev = mapBlockIndex.find(header.hashPrevBlock);
+                if (prev != mapBlockIndex.end() && (prev->second->nStatus & BLOCK_FAILED_MASK)) {
+                    if (first_invalid) *first_invalid = header;
+                    return state.DoS(100, false, REJECT_INVALID, "bad-prevblk");
+                }
+                if ((prev != mapBlockIndex.end() && !ContextualCheckBlockHeader(header, state, chainparams, prev->second, GetAdjustedTime())) ||
+                    !CheckBlockHeader(header, state, chainparams.GetConsensus())) {
+                    if (first_invalid) *first_invalid = header;
+                    return false;
+                }
+                break;
+            }
+            PrecomputeHeaderPoW(headers, chainparams.GetConsensus(), use_checkpoint ? checkpoint_sync : nullptr, &chainparams.Checkpoints());
+        }
         for (const CBlockHeader& header : headers) {
             CBlockIndex *pindex = nullptr; // Use a temp pindex instead of ppindex to avoid a const_cast
             if (!g_chainstate.AcceptBlockHeader(header, state, chainparams, &pindex, use_checkpoint && checkpoint_sync && checkpoint_sync->Authenticates(header.GetHash(), chainparams.Checkpoints()))) {
@@ -3904,6 +3962,7 @@ bool CChainState::LoadBlockIndex(const Consensus::Params& consensus_params, CBlo
     std::vector<CBlockHeader> pending;
     auto verify_pending = [&]() {
         if (ShutdownRequested()) return false;
+        PrecomputeHeaderPoW(pending, consensus_params);
         for (const auto& header : pending) {
             if (!CheckProofOfWorkMeasured(header, consensus_params))
                 return error("Unverified legacy header has invalid PoW (%s); rebuild with -reindex", header.GetHash().ToString());

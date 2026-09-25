@@ -285,6 +285,8 @@ bool LoadChainTip(const CChainParams& chainparams);
 void UnloadBlockIndex();
 /** Run an instance of the script checking thread */
 void ThreadScriptCheck();
+/** Worker for bounded, context-free header PoW precomputation. */
+void ThreadHeaderPoWCheck();
 /** Check whether we are doing an initial block download (synchronizing from disk or network) */
 bool IsInitialBlockDownload();
 /** Retrieve a transaction (from memory pool, or from disk, if possible) */
