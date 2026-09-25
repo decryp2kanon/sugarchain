@@ -2276,6 +2276,7 @@ void static UpdateTip(const CBlockIndex *pindexNew, const CChainParams& chainPar
             DoWarning(strWarning);
         }
     }
+    if (IsInitialBlockDownload()) return;
     LogPrintf("%s: new best=%s height=%d version=0x%08x log2_work=%.8g tx=%lu date='%s' progress=%f cache=%.1fMiB(%utxo)", __func__,
       pindexNew->GetBlockHash().ToString(), pindexNew->nHeight, pindexNew->nVersion,
       log(pindexNew->nChainWork.getdouble())/log(2.0), (unsigned long)pindexNew->nChainTx,
