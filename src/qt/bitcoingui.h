@@ -122,6 +122,7 @@ private:
     /** Keep track of previous number of blocks, to detect progress */
     int prevBlocks;
     int spinnerFrame;
+    bool checkpointHeaderSyncActive{false};
 
     const PlatformStyle *platformStyle;
 
@@ -158,6 +159,8 @@ public Q_SLOTS:
     void setNumConnections(int count);
     /** Set network state shown in the UI */
     void setNetworkActive(bool networkActive);
+    /** Display checkpoint progress, or restore ordinary synchronization when targetHeight is zero. */
+    void setCheckpointHeaderProgress(int startHeight, int height, int targetHeight, bool replaying);
     /** Set number of blocks and last block date shown in the UI */
     void setNumBlocks(int count, const QDateTime& blockDate, double nVerificationProgress, bool headers);
 
