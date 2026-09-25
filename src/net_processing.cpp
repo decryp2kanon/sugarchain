@@ -644,6 +644,8 @@ void PeerLogicValidation::FinalizeNode(NodeId nodeid, bool& fUpdateConnectionTim
     g_outbound_peers_with_protect_from_disconnect -= state->m_chain_sync.m_protect;
     assert(g_outbound_peers_with_protect_from_disconnect >= 0);
 
+    if (state->checkpoint_sync)
+        uiInterface.NotifyCheckpointHeaderProgress(0, 0, 0, false);
     mapNodeState.erase(nodeid);
 
     if (mapNodeState.empty()) {
@@ -1347,6 +1349,7 @@ bool static ProcessHeadersMessage(CNode *pfrom, CConnman *connman, const std::ve
             const int previous_height = checkpoint_sync->Height();
             if (!checkpoint_sync->Process(incoming_headers, headers)) {
                 LogPrintf("Checkpoint header authentication failed, disconnecting peer=%d\n", pfrom->GetId());
+                uiInterface.NotifyCheckpointHeaderProgress(0, 0, 0, false);
                 nodestate->checkpoint_sync.reset();
                 pfrom->fDisconnect = true;
                 return false;
@@ -1360,6 +1363,13 @@ bool static ProcessHeadersMessage(CNode *pfrom, CConnman *connman, const std::ve
             if (!was_replaying && checkpoint_sync->Replaying()) {
                 checkpoint_replay = std::make_shared<const Checkpoints::HeaderSync>(*checkpoint_sync);
                 LogPrintf("Checkpoint header commitments authenticated; replaying peer=%d\n", pfrom->GetId());
+            }
+            // Match the logging interval; always report phase changes immediately.
+            // Only scalar progress is passed to asynchronous UI subscribers.
+            if (was_replaying != checkpoint_sync->Replaying() ||
+                previous_height / 100000 != checkpoint_sync->Height() / 100000) {
+                uiInterface.NotifyCheckpointHeaderProgress(checkpoint_sync->StartHeight(),
+                    checkpoint_sync->Height(), checkpoint_sync->StopHeight(), checkpoint_sync->Replaying());
             }
             if (headers.empty()) {
                 connman->PushMessage(pfrom, msgMaker.Make(NetMsgType::GETHEADERS,
@@ -1492,6 +1502,7 @@ bool static ProcessHeadersMessage(CNode *pfrom, CConnman *connman, const std::ve
 
         if (checkpoint_sync) {
             if (checkpoint_sync->Complete()) {
+                uiInterface.NotifyCheckpointHeaderProgress(0, 0, 0, false);
                 nodestate->checkpoint_sync.reset();
                 checkpoint_replay.reset();
                 LogPrintf("Checkpoint header replay complete at height=%d peer=%d\n", pindexLast->nHeight, pfrom->GetId());
@@ -3372,6 +3383,8 @@ bool PeerLogicValidation::SendMessages(CNode* pto, std::atomic<bool>& interruptM
                         if (checkpoint_replay) state.checkpoint_sync = checkpoint_replay->Resume(checkpoints);
                         if (!state.checkpoint_sync)
                             state.checkpoint_sync = std::make_shared<Checkpoints::HeaderSync>(start->nHeight, start->GetBlockHash(), checkpoints);
+                        uiInterface.NotifyCheckpointHeaderProgress(state.checkpoint_sync->StartHeight(),
+                            state.checkpoint_sync->Height(), state.checkpoint_sync->StopHeight(), state.checkpoint_sync->Replaying());
                         state.checkpoint_sync_deadline = GetTime() + 4 * 60 * 60;
                         state.checkpoint_sync_progress_deadline = GetTime() + 60;
                         state.nHeadersSyncTimeout = std::numeric_limits<int64_t>::max();
@@ -3733,6 +3746,7 @@ bool PeerLogicValidation::SendMessages(CNode* pto, std::atomic<bool>& interruptM
         // even when no alternative peer is available or a peer is whitelisted.
         if (state.checkpoint_sync && GetTime() > state.checkpoint_sync_progress_deadline) {
             LogPrintf("Timeout authenticating checkpoint headers, disconnecting peer=%d\n", pto->GetId());
+            uiInterface.NotifyCheckpointHeaderProgress(0, 0, 0, false);
             state.checkpoint_sync.reset();
             pto->fDisconnect = true;
             return true;
@@ -3759,6 +3773,8 @@ bool PeerLogicValidation::SendMessages(CNode* pto, std::atomic<bool>& interruptM
                         // getheaders message to be sent to
                         // this peer (eventually).
                         state.fSyncStarted = false;
+                        if (state.checkpoint_sync)
+                            uiInterface.NotifyCheckpointHeaderProgress(0, 0, 0, false);
                         state.checkpoint_sync.reset();
                         nSyncStarted--;
                         state.nHeadersSyncTimeout = 0;

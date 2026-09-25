@@ -46,6 +46,8 @@ public:
     bool Complete() const { return m_complete; }
     bool Replaying() const { return m_replaying; }
     int Height() const { return m_height; }
+    int StartHeight() const { return m_start_height; }
+    int StopHeight() const { return m_checkpoints.rbegin()->first; }
     size_t CommitmentCount() const { return m_commitments.size(); }
 private:
     const int m_start_height;

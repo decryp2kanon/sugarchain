@@ -19,6 +19,7 @@
 #include <test/test_bitcoin.h>
 #include <validation.h>
 #include <validationinterface.h>
+#include <ui_interface.h>
 
 struct RegtestingSetup : public TestingSetup {
     RegtestingSetup() : TestingSetup(CBaseChainParams::REGTEST) {}
@@ -329,6 +330,8 @@ BOOST_AUTO_TEST_CASE(checkpoint_presync_authenticates_before_indexing)
     const CCheckpointData checkpoints{{{510, headers[509].GetHash()}, {2003, headers.back().GetHash()}}};
     CheckpointTestParams params(checkpoints);
     Checkpoints::HeaderSync sync(0, Params().GenesisBlock().GetHash(), checkpoints);
+    BOOST_CHECK_EQUAL(sync.StartHeight(), 0);
+    BOOST_CHECK_EQUAL(sync.StopHeight(), checkpoints.mapCheckpoints.rbegin()->first);
     std::vector<CBlockHeader> authenticated;
     const auto size_before = mapBlockIndex.size();
     const auto* best_before = pindexBestHeader;
@@ -549,6 +552,10 @@ BOOST_AUTO_TEST_CASE(header_pow_evidence_is_exact_and_parallel_validation_is_ord
 BOOST_AUTO_TEST_CASE(checkpoint_authentication_through_p2p_headers_messages)
 {
     FastIBDOptions options;
+    struct Progress { int start, height, target; bool replay; };
+    std::vector<Progress> progress;
+    boost::signals2::scoped_connection progress_connection(uiInterface.NotifyCheckpointHeaderProgress.connect(
+        [&](int start, int height, int target, bool replay) { progress.push_back({start, height, target, replay}); }));
     const auto headers = HeaderChain(8003);
     auto& checkpoints = const_cast<CCheckpointData&>(Params().Checkpoints());
     struct RestoreCheckpoints {
@@ -570,6 +577,8 @@ BOOST_AUTO_TEST_CASE(checkpoint_authentication_through_p2p_headers_messages)
     // Bad presync, stalled presync, absolute presync timeout, healthy long
     // replay, equivocating replacement, partial-packet peer loss, completion.
     for (int scenario : {0, 1, 6, 2, 3, 4, 5}) {
+        if (!progress.empty()) BOOST_CHECK_EQUAL(progress.back().target, 0);
+        progress.clear();
         CNode peer(12345 + scenario, ServiceFlags(NODE_NETWORK | NODE_WITNESS), 0, INVALID_SOCKET, addr, 0, 0, CAddress(), "", false);
         peer.SetSendVersion(PROTOCOL_VERSION);
         peerLogic->InitializeNode(&peer);
@@ -585,6 +594,11 @@ BOOST_AUTO_TEST_CASE(checkpoint_authentication_through_p2p_headers_messages)
             LOCK(peer.cs_sendProcessing);
             peerLogic->SendMessages(&peer, interrupt);
         }
+        BOOST_REQUIRE_EQUAL(progress.size(), 1U);
+        BOOST_CHECK_EQUAL(progress.back().start, 0);
+        BOOST_CHECK_EQUAL(progress.back().height, scenario >= 3 && scenario != 6 ? 4000 : 0);
+        BOOST_CHECK_EQUAL(progress.back().target, 8003);
+        BOOST_CHECK_EQUAL(progress.back().replay, scenario >= 3 && scenario != 6);
         const auto receive = [&](const std::vector<CBlockHeader>& packet, CNode* sender = nullptr) {
             CNode& target = sender ? *sender : peer;
             CDataStream payload(SER_NETWORK, PROTOCOL_VERSION);
@@ -657,6 +671,7 @@ BOOST_AUTO_TEST_CASE(checkpoint_authentication_through_p2p_headers_messages)
             BOOST_CHECK_EQUAL(pindexBestHeader->nHeight, 6000); // No second presync.
             receive({headers.begin() + 6000, headers.begin() + 8000});
             receive({headers.begin() + 8000, headers.end()});
+            BOOST_CHECK_EQUAL(progress.back().target, 0); // Replay completion clears the UI.
             BOOST_CHECK_EQUAL(pindexBestHeader->nHeight, 8003);
             BOOST_CHECK(!peer.fDisconnect);
             CBlockHeader invalid = headers.back();
@@ -691,6 +706,12 @@ BOOST_AUTO_TEST_CASE(checkpoint_authentication_through_p2p_headers_messages)
             BOOST_CHECK_EQUAL(mapBlockIndex.size(), 1U);
             BOOST_CHECK(!peer.fDisconnect);
         }
+        // No per-packet GUI updates below the 100,000-height boundary;
+        // the presync -> replay transition is nevertheless immediate.
+        BOOST_REQUIRE_EQUAL(progress.size(), 2U);
+        BOOST_CHECK(progress.back().replay);
+        BOOST_CHECK_EQUAL(progress.back().height, 0);
+        BOOST_CHECK_EQUAL(progress.back().target, 8003);
         receive({headers.begin(), headers.begin() + 2000});
         BOOST_CHECK_EQUAL(pindexBestHeader->nHeight, 2000);
         // Reproduce the observed trigger: useful replay crosses the original
