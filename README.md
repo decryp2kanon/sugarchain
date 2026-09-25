@@ -165,6 +165,10 @@ All Sugarchain Yumekawa developers should execute this unit test. Some updates m
 ./src/qt/test/test_sugarchain-qt
 ```
 
+- (optional) Estimate full IBD time without running a complete IBD
+  * Requires a stopped, fully synced unpruned datadir and a separate synced RPC node.
+  * See `contrib/bench/estimate-ibd.md` for usage.
+
 
 Run
 ---
