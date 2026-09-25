@@ -288,6 +288,8 @@ public:
                 // This is also the block whose chainwork is nMinimumChainWork.
                 // Minimum chain work at height 37,500,000 (latest halving).
                 {37500000, uint256S("4637782372a194f62d0e01264d90bac655aa86d273459fcdc7c0bc27d1a0f867")},
+                // 2026-09-17; over seven days and 136,000 blocks deep when selected.
+                {44450000, uint256S("8681ed0285025f1f4d43ce84a61eea44b55fcd9509aa2dc3e1e76dddc0aa84f0")},
             }
         };
 
