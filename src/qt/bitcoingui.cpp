@@ -4,6 +4,8 @@
 
 #include <qt/bitcoingui.h>
 
+#include <boost/bind.hpp>
+
 #include <qt/bitcoinunits.h>
 #include <qt/clientmodel.h>
 #include <qt/guiconstants.h>

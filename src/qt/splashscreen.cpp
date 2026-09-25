@@ -9,6 +9,8 @@
 
 #include <qt/splashscreen.h>
 
+#include <boost/bind.hpp>
+
 #include <qt/networkstyle.h>
 
 #include <clientversion.h>
