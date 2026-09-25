@@ -11,6 +11,7 @@
 #include <util.h>
 #include <qt/test/uritests.h>
 #include <qt/test/compattests.h>
+#include <qt/test/checkpointprogresstests.h>
 
 #ifdef ENABLE_WALLET
 #include <qt/test/paymentservertests.h>
@@ -100,6 +101,11 @@ int main(int argc, char *argv[])
         fInvalid = true;
     }
 #endif
+
+    CheckpointProgressTests checkpointProgressTests;
+    if (QTest::qExec(&checkpointProgressTests) != 0) {
+        fInvalid = true;
+    }
 
     fs::remove_all(pathTemp);
 

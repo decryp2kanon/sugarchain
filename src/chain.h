@@ -174,6 +174,10 @@ enum BlockStatus: uint32_t {
     BLOCK_FAILED_CHILD       =   64, //!< descends from failed block
     BLOCK_FAILED_MASK        =   BLOCK_FAILED_VALID | BLOCK_FAILED_CHILD,
 
+    // Persisted evidence, separate from TREE validity. Never set from claimed
+    // chainwork, IBD state, or an unauthenticated first-pass header.
+    BLOCK_POW_CHECKED       =   256, //!< actual Yespower check succeeded
+    BLOCK_CHECKPOINT_CHECKED = 512, //!< header authenticated to a compiled-in checkpoint
     BLOCK_OPT_WITNESS       =   128, //!< block data in blk*.data was received with a witness-enforcing client
 };
 
@@ -228,10 +232,6 @@ public:
     uint32_t nBits;
     uint32_t nNonce;
 
-    //! (currently memory only, but don't have to be)
-    bool cache_init;
-    uint256 cache_block_hash, cache_PoW_hash;
-
     //! (memory only) Sequential id assigned to distinguish order in which blocks are received.
     int32_t nSequenceId;
 
@@ -259,8 +259,6 @@ public:
         nTime          = 0;
         nBits          = 0;
         nNonce         = 0;
-
-        cache_init     = false;
     }
 
     CBlockIndex()
@@ -277,10 +275,6 @@ public:
         nTime          = block.nTime;
         nBits          = block.nBits;
         nNonce         = block.nNonce;
-
-        cache_init     = block.cache_init;
-        cache_block_hash = block.cache_block_hash;
-        cache_PoW_hash = block.cache_PoW_hash;
     }
 
     CDiskBlockPos GetBlockPos() const {
@@ -311,10 +305,6 @@ public:
         block.nTime          = nTime;
         block.nBits          = nBits;
         block.nNonce         = nNonce;
-
-        block.cache_init     = cache_init;
-        block.cache_block_hash = cache_block_hash;
-        block.cache_PoW_hash = cache_PoW_hash;
 
         return block;
     }

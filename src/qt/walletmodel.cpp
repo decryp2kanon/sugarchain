@@ -5,6 +5,8 @@
 
 #include <qt/walletmodel.h>
 
+#include <boost/bind.hpp>
+
 #include <qt/addresstablemodel.h>
 #include <consensus/validation.h>
 #include <qt/guiconstants.h>

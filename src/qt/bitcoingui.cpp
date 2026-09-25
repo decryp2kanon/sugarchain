@@ -4,6 +4,8 @@
 
 #include <qt/bitcoingui.h>
 
+#include <boost/bind.hpp>
+
 #include <qt/bitcoinunits.h>
 #include <qt/clientmodel.h>
 #include <qt/guiconstants.h>
@@ -40,6 +42,7 @@
 #include <QDesktopWidget>
 #include <QDragEnterEvent>
 #include <QListWidget>
+#include <QLocale>
 #include <QMenuBar>
 #include <QMessageBox>
 #include <QMimeData>
@@ -483,6 +486,7 @@ void BitcoinGUI::setClientModel(ClientModel *_clientModel)
         modalOverlay->setKnownBestHeight(_clientModel->getHeaderTipHeight(), QDateTime::fromTime_t(_clientModel->getHeaderTipTime()));
         setNumBlocks(_clientModel->getNumBlocks(), _clientModel->getLastBlockDate(), _clientModel->getVerificationProgress(nullptr), false);
         connect(_clientModel, SIGNAL(numBlocksChanged(int,QDateTime,double,bool)), this, SLOT(setNumBlocks(int,QDateTime,double,bool)));
+        connect(_clientModel, SIGNAL(checkpointHeaderProgress(int,int,int,bool)), this, SLOT(setCheckpointHeaderProgress(int,int,int,bool)));
 
         // Receive and report messages from client model
         connect(_clientModel, SIGNAL(message(QString,QString,unsigned int)), this, SLOT(message(QString,QString,unsigned int)));
@@ -762,6 +766,40 @@ void BitcoinGUI::updateHeadersSyncProgressLabel()
         progressBarLabel->setText(tr("Syncing Headers (%1%)...").arg(QString::number(100.0 / (headersTipHeight+estHeadersLeft)*headersTipHeight, 'f', 1)));
 }
 
+void BitcoinGUI::setCheckpointHeaderProgress(int startHeight, int height, int targetHeight, bool replaying)
+{
+    checkpointHeaderSyncActive = targetHeight > startHeight;
+    if (!clientModel) return;
+    if (!checkpointHeaderSyncActive) {
+        setNumBlocks(clientModel->getNumBlocks(), clientModel->getLastBlockDate(),
+                     clientModel->getVerificationProgress(nullptr), false);
+        return;
+    }
+
+    const double progress = qBound(0.0, double(height - startHeight) / (targetHeight - startHeight), 1.0);
+    const QString text = (replaying ? tr("Replaying headers... %1 / %2 (%3%)") :
+                                     tr("Presyncing headers... %1 / %2 (%3%)"))
+        .arg(QLocale().toString(height)).arg(QLocale().toString(targetHeight))
+        .arg(QLocale().toString(progress * 100.0, 'f', 1));
+    statusBar()->clearMessage();
+    progressBarLabel->setText(text);
+    progressBarLabel->setVisible(true);
+    progressBar->setMaximum(1000000000);
+    progressBar->setValue(progress * 1000000000.0 + 0.5);
+    progressBar->setFormat(tr("%p%"));
+    progressBar->setVisible(true);
+    labelBlocksIcon->setPixmap(platformStyle->SingleColorIcon(QString(
+        ":/movies/spinner-%1").arg(spinnerFrame, 3, 10, QChar('0')))
+        .pixmap(STATUSBAR_ICONSIZE, STATUSBAR_ICONSIZE));
+    spinnerFrame = (spinnerFrame + 1) % SPINNER_FRAMES;
+    labelBlocksIcon->setToolTip(text);
+    progressBarLabel->setToolTip(text);
+    progressBar->setToolTip(text);
+#ifdef ENABLE_WALLET
+    if (walletFrame) walletFrame->showOutOfSyncWarning(true);
+#endif
+}
+
 void BitcoinGUI::setNumBlocks(int count, const QDateTime& blockDate, double nVerificationProgress, bool header)
 {
     if (modalOverlay)
@@ -773,6 +811,9 @@ void BitcoinGUI::setNumBlocks(int count, const QDateTime& blockDate, double nVer
     }
     if (!clientModel)
         return;
+
+    // Ordinary tip notifications must not overwrite checkpoint progress.
+    if (checkpointHeaderSyncActive) return;
 
     // Prevent orphan statusbar messages (e.g. hover Quit in main menu, wait until chain-sync starts -> garbled text)
     statusBar()->clearMessage();

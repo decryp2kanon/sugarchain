@@ -10,6 +10,7 @@
 #include <arith_uint256.h>
 #include <blockencodings.h>
 #include <chainparams.h>
+#include <checkpoints.h>
 #include <consensus/validation.h>
 #include <hash.h>
 #include <init.h>
@@ -179,6 +180,11 @@ struct CNodeState {
     int nUnconnectingHeaders;
     //! Whether we've started headers synchronization with this peer.
     bool fSyncStarted;
+    // Sparse, peer-local first-pass commitments. Unauthenticated headers never
+    // enter mapBlockIndex, best-header selection, or block download scheduling.
+    std::shared_ptr<Checkpoints::HeaderSync> checkpoint_sync;
+    int64_t checkpoint_sync_deadline{0};
+    int64_t checkpoint_sync_progress_deadline{0};
     //! When to potentially disconnect peer for stalling headers download
     int64_t nHeadersSyncTimeout;
     //! Since when we're stalling block download progress (in microseconds), or 0.
@@ -188,6 +194,9 @@ struct CNodeState {
     int64_t nDownloadingSince;
     int nBlocksInFlight;
     int nBlocksInFlightValidHeaders;
+    int64_t nIBDDeliverySampleStart;
+    unsigned int nIBDBlocksDelivered;
+    double dIBDBlockDeliveryRateEstimate;
     //! Whether we consider this a preferred download peer.
     bool fPreferredDownload;
     //! Whether this peer wants invs or headers (when possible) for block announcements.
@@ -255,6 +264,9 @@ struct CNodeState {
         nDownloadingSince = 0;
         nBlocksInFlight = 0;
         nBlocksInFlightValidHeaders = 0;
+        nIBDDeliverySampleStart = 0;
+        nIBDBlocksDelivered = 0;
+        dIBDBlockDeliveryRateEstimate = 0;
         fPreferredDownload = false;
         fPreferHeaders = false;
         fPreferHeaderAndIDs = false;
@@ -269,6 +281,10 @@ struct CNodeState {
 
 /** Map maintaining per-node state. Requires cs_main. */
 std::map<NodeId, CNodeState> mapNodeState;
+
+// One immutable, endpoint-authenticated snapshot, independent of peer lifetime.
+// It contains hashes, not block-index pointers or unverified replay packets.
+static std::shared_ptr<const Checkpoints::HeaderSync> checkpoint_replay GUARDED_BY(cs_main);
 
 // Requires cs_main.
 CNodeState *State(NodeId pnode) {
@@ -369,6 +385,31 @@ bool MarkBlockAsInFlight(NodeId nodeid, const uint256& hash, const CBlockIndex* 
     if (pit)
         *pit = &itInFlight->second.second;
     return true;
+}
+
+// Requires cs_main. Track the effective delivery rate of blocks requested
+// from this peer without changing or duplicating any in-flight request.
+void RecordBlockDelivery(NodeId nodeid, const uint256& hash) {
+    const auto itInFlight = mapBlocksInFlight.find(hash);
+    if (itInFlight == mapBlocksInFlight.end() || itInFlight->second.first != nodeid) return;
+
+    CNodeState* state = State(nodeid);
+    assert(state != nullptr);
+    const int64_t now = GetTimeMicros();
+    if (state->nIBDDeliverySampleStart == 0) {
+        state->nIBDDeliverySampleStart = now;
+    }
+    ++state->nIBDBlocksDelivered;
+
+    const int64_t elapsed = now - state->nIBDDeliverySampleStart;
+    if (elapsed >= 1000000) {
+        const double sampleRate = state->nIBDBlocksDelivered * 1000000.0 / elapsed;
+        state->dIBDBlockDeliveryRateEstimate = state->dIBDBlockDeliveryRateEstimate == 0
+            ? sampleRate
+            : state->dIBDBlockDeliveryRateEstimate * 0.75 + sampleRate * 0.25;
+        state->nIBDDeliverySampleStart = now;
+        state->nIBDBlocksDelivered = 0;
+    }
 }
 
 /** Check whether the last unknown block a peer advertised is not yet known. */
@@ -475,7 +516,7 @@ void FindNextBlocksToDownload(NodeId nodeid, unsigned int count, std::vector<con
     // Make sure pindexBestKnownBlock is up to date, we'll need it.
     ProcessBlockAvailability(nodeid);
 
-    if (state->pindexBestKnownBlock == nullptr || state->pindexBestKnownBlock->nChainWork < chainActive.Tip()->nChainWork) {
+    if (state->pindexBestKnownBlock == nullptr || state->pindexBestKnownBlock->nChainWork < chainActive.Tip()->nChainWork || state->pindexBestKnownBlock->nChainWork < nMinimumChainWork) {
         // This peer has nothing interesting.
         return;
     }
@@ -603,6 +644,8 @@ void PeerLogicValidation::FinalizeNode(NodeId nodeid, bool& fUpdateConnectionTim
     g_outbound_peers_with_protect_from_disconnect -= state->m_chain_sync.m_protect;
     assert(g_outbound_peers_with_protect_from_disconnect >= 0);
 
+    if (state->checkpoint_sync)
+        uiInterface.NotifyCheckpointHeaderProgress(0, 0, 0, false);
     mapNodeState.erase(nodeid);
 
     if (mapNodeState.empty()) {
@@ -800,6 +843,7 @@ static bool BlockRequestAllowed(const CBlockIndex* pindex, const Consensus::Para
 PeerLogicValidation::PeerLogicValidation(CConnman* connmanIn, CScheduler &scheduler) : connman(connmanIn), m_stale_tip_check_time(0) {
     // Initialize global variables that cannot be constructed at startup.
     recentRejects.reset(new CRollingBloomFilter(120000, 0.000001));
+    { LOCK(cs_main); checkpoint_replay.reset(); }
 
     const Consensus::Params& consensusParams = Params().GetConsensus();
     // Stale tip checking and peer eviction are on two different timers, but we
@@ -1272,10 +1316,69 @@ inline void static SendBlockTransactions(const CBlock& block, const BlockTransac
     connman->PushMessage(pfrom, msgMaker.Make(nSendFlags, NetMsgType::BLOCKTXN, resp));
 }
 
-bool static ProcessHeadersMessage(CNode *pfrom, CConnman *connman, const std::vector<CBlockHeader>& headers, const CChainParams& chainparams, bool punish_duplicate_invalid)
+static bool NeedsCheckpointHeaderSync(const CChainParams& chainparams)
 {
+    AssertLockHeld(cs_main);
+    const auto& checkpoints = chainparams.Checkpoints().mapCheckpoints;
+    return gArgs.GetBoolArg("-fast-ibd", true) && fCheckpointsEnabled &&
+           !checkpoints.empty() && !mapBlockIndex.count(checkpoints.rbegin()->second);
+}
+
+bool static ProcessHeadersMessage(CNode *pfrom, CConnman *connman, const std::vector<CBlockHeader>& incoming_headers, const CChainParams& chainparams, bool punish_duplicate_invalid)
+{
+    std::vector<CBlockHeader> headers(incoming_headers);
+    std::shared_ptr<Checkpoints::HeaderSync> checkpoint_sync;
     const CNetMsgMaker msgMaker(pfrom->GetSendVersion());
     size_t nCount = headers.size();
+
+    {
+        LOCK(cs_main);
+        auto* nodestate = State(pfrom->GetId());
+        checkpoint_sync = nodestate->checkpoint_sync;
+        // We did not request these historical headers from this peer. Let the
+        // sole presync session authenticate history instead of allowing other
+        // peers' announcements to trigger redundant bulk Yespower work.
+        if (!checkpoint_sync && NeedsCheckpointHeaderSync(chainparams)) return true;
+        if (checkpoint_sync) {
+            // Concurrent tip announcements can be unrelated to our outstanding
+            // historical request. Ignore those; a nonconnecting bulk response
+            // or an incomplete terminal response terminates this sync peer.
+            if (!headers.empty() && headers.size() < MAX_BLOCKS_TO_ANNOUNCE &&
+                headers.front().hashPrevBlock != checkpoint_sync->NextHash()) return true;
+            const bool was_replaying = checkpoint_sync->Replaying();
+            const int previous_height = checkpoint_sync->Height();
+            if (!checkpoint_sync->Process(incoming_headers, headers)) {
+                LogPrintf("Checkpoint header authentication failed, disconnecting peer=%d\n", pfrom->GetId());
+                uiInterface.NotifyCheckpointHeaderProgress(0, 0, 0, false);
+                nodestate->checkpoint_sync.reset();
+                pfrom->fDisconnect = true;
+                return false;
+            }
+            // Only unauthenticated presync has an absolute lifetime limit.
+            // Authenticated replay still has to make progress every 60 seconds.
+            nodestate->checkpoint_sync_progress_deadline = checkpoint_sync->Replaying() ? GetTime() + 60 :
+                std::min<int64_t>(nodestate->checkpoint_sync_deadline, GetTime() + 60);
+            if (was_replaying == checkpoint_sync->Replaying() && previous_height / 100000 != checkpoint_sync->Height() / 100000)
+                LogPrintf("Checkpoint header %s height=%d peer=%d\n", was_replaying ? "replay" : "presync", checkpoint_sync->Height(), pfrom->GetId());
+            if (!was_replaying && checkpoint_sync->Replaying()) {
+                checkpoint_replay = std::make_shared<const Checkpoints::HeaderSync>(*checkpoint_sync);
+                LogPrintf("Checkpoint header commitments authenticated; replaying peer=%d\n", pfrom->GetId());
+            }
+            // Match the logging interval; always report phase changes immediately.
+            // Only scalar progress is passed to asynchronous UI subscribers.
+            if (was_replaying != checkpoint_sync->Replaying() ||
+                previous_height / 100000 != checkpoint_sync->Height() / 100000) {
+                uiInterface.NotifyCheckpointHeaderProgress(checkpoint_sync->StartHeight(),
+                    checkpoint_sync->Height(), checkpoint_sync->StopHeight(), checkpoint_sync->Replaying());
+            }
+            if (headers.empty()) {
+                connman->PushMessage(pfrom, msgMaker.Make(NetMsgType::GETHEADERS,
+                    CBlockLocator({checkpoint_sync->NextHash(), chainparams.GetConsensus().hashGenesisBlock}), checkpoint_sync->StopHash()));
+                return true;
+            }
+            nCount = headers.size();
+        }
+    }
 
     if (nCount == 0) {
         // Nothing interesting. Stop asking this peers for more headers.
@@ -1333,7 +1436,7 @@ bool static ProcessHeadersMessage(CNode *pfrom, CConnman *connman, const std::ve
 
     CValidationState state;
     CBlockHeader first_invalid_header;
-    if (!ProcessNewBlockHeaders(headers, state, chainparams, &pindexLast, &first_invalid_header)) {
+    if (!ProcessNewBlockHeaders(headers, state, chainparams, &pindexLast, &first_invalid_header, checkpoint_sync.get())) {
         int nDoS;
         if (state.IsInvalid(nDoS)) {
             LOCK(cs_main);
@@ -1397,7 +1500,21 @@ bool static ProcessHeadersMessage(CNode *pfrom, CConnman *connman, const std::ve
             nodestate->m_last_block_announcement = GetTime();
         }
 
-        if (nCount == MAX_HEADERS_RESULTS) {
+        if (checkpoint_sync) {
+            if (checkpoint_sync->Complete()) {
+                uiInterface.NotifyCheckpointHeaderProgress(0, 0, 0, false);
+                nodestate->checkpoint_sync.reset();
+                checkpoint_replay.reset();
+                LogPrintf("Checkpoint header replay complete at height=%d peer=%d\n", pindexLast->nHeight, pfrom->GetId());
+                // Continue with real PoW verification beyond the checkpoint.
+                connman->PushMessage(pfrom, msgMaker.Make(NetMsgType::GETHEADERS, chainActive.GetLocator(pindexLast), uint256()));
+                nodestate->nHeadersSyncTimeout = GetTimeMicros() + HEADERS_DOWNLOAD_TIMEOUT_BASE +
+                    HEADERS_DOWNLOAD_TIMEOUT_PER_HEADER * std::max<int64_t>(0, GetAdjustedTime() - pindexLast->GetBlockTime()) / chainparams.GetConsensus().nPowTargetSpacing;
+            } else {
+                connman->PushMessage(pfrom, msgMaker.Make(NetMsgType::GETHEADERS,
+                    CBlockLocator({checkpoint_sync->NextHash(), chainparams.GetConsensus().hashGenesisBlock}), checkpoint_sync->StopHash()));
+            }
+        } else if (nCount == MAX_HEADERS_RESULTS && received_new_header) {
             // Headers message had its maximum size; the peer may have more headers.
             // TODO: optimize: if pindexLast is an ancestor of chainActive.Tip or pindexBestHeader, continue
             // from there instead.
@@ -1461,9 +1578,20 @@ bool static ProcessHeadersMessage(CNode *pfrom, CConnman *connman, const std::ve
         if (IsInitialBlockDownload() && nCount != MAX_HEADERS_RESULTS) {
             // When nCount < MAX_HEADERS_RESULTS, we know we have no more
             // headers to fetch from this peer.
-            // SUGAR: Do not disconnect peers below nMinimumChainWork during IBD.
-            // This allows block synchronization to start before the peer's
-            // advertised chain reaches the configured minimum chain work.
+            if (nodestate->pindexBestKnownBlock && nodestate->pindexBestKnownBlock->nChainWork < nMinimumChainWork) {
+                // This peer has too little work on their headers chain to help
+                // us sync -- disconnect if using an outbound slot (unless
+                // whitelisted or addnode).
+                // Note: We compare their tip to nMinimumChainWork (rather than
+                // chainActive.Tip()) because we won't start block download
+                // until we have a headers chain that has at least
+                // nMinimumChainWork, even if a peer has a chain past our tip,
+                // as an anti-DoS measure.
+                if (IsOutboundDisconnectionCandidate(pfrom)) {
+                    LogPrintf("Disconnecting outbound peer %d -- headers chain has insufficient work\n", pfrom->GetId());
+                    pfrom->fDisconnect = true;
+                }
+            }
         }
 
         if (!pfrom->fDisconnect && IsOutboundDisconnectionCandidate(pfrom) && nodestate->pindexBestKnownBlock != nullptr) {
@@ -1876,7 +2004,7 @@ bool static ProcessMessage(CNode* pfrom, const std::string& strCommand, CDataStr
 
             if (inv.type == MSG_BLOCK) {
                 UpdateBlockAvailability(pfrom->GetId(), inv.hash);
-                if (!fAlreadyHave && !fImporting && !fReindex && !mapBlocksInFlight.count(inv.hash)) {
+                if (!fAlreadyHave && !fImporting && !fReindex && !NeedsCheckpointHeaderSync(chainparams) && !mapBlocksInFlight.count(inv.hash)) {
                     // We used to request the full block here, but since headers-announcements are now the
                     // primary method of announcement on the network, and since, in the case that a node
                     // fell back to inv we probably have a reorg which we should get the headers for first,
@@ -2618,6 +2746,7 @@ bool static ProcessMessage(CNode* pfrom, const std::string& strCommand, CDataStr
             LOCK(cs_main);
             // Also always process if we requested the block explicitly, as we may
             // need it even though it is not a candidate for a new best tip.
+            RecordBlockDelivery(pfrom->GetId(), hash);
             forceProcessing |= MarkBlockAsReceived(hash);
             // mapBlockSource is only used for sending reject messages and DoS scores,
             // so the race between here and cs_main in ProcessNewBlock is fine.
@@ -2905,7 +3034,9 @@ bool PeerLogicValidation::ProcessMessages(CNode* pfrom, std::atomic<bool>& inter
         LOCK(pfrom->cs_vProcessMsg);
         if (pfrom->vProcessMsg.empty())
             return false;
-        // Just take one message
+        // Process messages in receive order. Scanning the entire queue for a
+        // HEADERS message on every call becomes quadratic when a deep IBD
+        // block pipeline leaves thousands of BLOCK messages queued.
         msgs.splice(msgs.begin(), pfrom->vProcessMsg, pfrom->vProcessMsg.begin());
         pfrom->nProcessQueueSize -= msgs.front().vRecv.size() + CMessageHeader::HEADER_SIZE;
         pfrom->fPauseRecv = pfrom->nProcessQueueSize > connman->GetReceiveFloodSize();
@@ -3000,6 +3131,9 @@ void PeerLogicValidation::ConsiderEviction(CNode *pto, int64_t time_in_seconds)
 
     CNodeState &state = *State(pto->GetId());
     const CNetMsgMaker msgMaker(pto->GetSendVersion());
+    // Quarantine intentionally has no indexed chainwork yet, and is governed
+    // by its own progress/absolute deadlines. Do not send a competing locator.
+    if (state.checkpoint_sync) return;
 
     if (!state.m_chain_sync.m_protect && IsOutboundDisconnectionCandidate(pto) && state.fSyncStarted) {
         // This is an outbound peer subject to disconnection if they don't
@@ -3232,23 +3366,52 @@ bool PeerLogicValidation::SendMessages(CNode* pto, std::atomic<bool>& interruptM
             pindexBestHeader = chainActive.Tip();
         bool fFetch = state.fPreferredDownload || (nPreferredDownload == 0 && !pto->fClient && !pto->fOneShot); // Download if this is a nice peer, or we have no nice peers and this one might do.
         if (!state.fSyncStarted && !pto->fClient && !fImporting && !fReindex) {
-            // Only actively request headers from a single peer, unless we're close to today.
-            if ((nSyncStarted == 0 && fFetch) || pindexBestHeader->GetBlockTime() > GetAdjustedTime() - 24 * 60 * 60) {
+            // During deep IBD, synchronize headers from one preferred peer at a
+            // time. This avoids downloading and processing the same historical
+            // header ranges concurrently from every preferred peer.
+            const auto& checkpoints = Params().Checkpoints();
+            const bool need_checkpoint_sync = NeedsCheckpointHeaderSync(Params());
+            if ((nSyncStarted == 0 && fFetch) ||
+                (!need_checkpoint_sync && pindexBestHeader->GetBlockTime() > GetAdjustedTime() - 24 * 60 * 60)) {
                 state.fSyncStarted = true;
                 state.nHeadersSyncTimeout = GetTimeMicros() + HEADERS_DOWNLOAD_TIMEOUT_BASE + HEADERS_DOWNLOAD_TIMEOUT_PER_HEADER * (GetAdjustedTime() - pindexBestHeader->GetBlockTime())/(consensusParams.nPowTargetSpacing);
                 nSyncStarted++;
-                const CBlockIndex *pindexStart = pindexBestHeader;
-                /* If possible, start at the block preceding the currently
-                   best known header.  This ensures that we always get a
-                   non-empty list of headers back as long as the peer
-                   is up-to-date.  With a non-empty response, we can initialise
-                   the peer's known best block.  This wouldn't be possible
-                   if we requested starting at pindexBestHeader and
-                   got back an empty response.  */
-                if (pindexStart->pprev)
-                    pindexStart = pindexStart->pprev;
-                LogPrint(BCLog::NET, "initial getheaders (%d) to peer=%d (startheight:%d)\n", pindexStart->nHeight, pto->GetId(), pto->nStartingHeight);
-                connman->PushMessage(pto, msgMaker.Make(NetMsgType::GETHEADERS, chainActive.GetLocator(pindexStart), uint256()));
+                if (need_checkpoint_sync) {
+                    const CBlockIndex* start = Checkpoints::GetLastCheckpoint(checkpoints);
+                    if (!start) start = chainActive.Genesis();
+                    if (start && start->nHeight < checkpoints.mapCheckpoints.rbegin()->first) {
+                        if (checkpoint_replay) state.checkpoint_sync = checkpoint_replay->Resume(checkpoints);
+                        if (!state.checkpoint_sync)
+                            state.checkpoint_sync = std::make_shared<Checkpoints::HeaderSync>(start->nHeight, start->GetBlockHash(), checkpoints);
+                        uiInterface.NotifyCheckpointHeaderProgress(state.checkpoint_sync->StartHeight(),
+                            state.checkpoint_sync->Height(), state.checkpoint_sync->StopHeight(), state.checkpoint_sync->Replaying());
+                        state.checkpoint_sync_deadline = GetTime() + 4 * 60 * 60;
+                        state.checkpoint_sync_progress_deadline = GetTime() + 60;
+                        state.nHeadersSyncTimeout = std::numeric_limits<int64_t>::max();
+                        LogPrintf("%s checkpoint header %s from height=%d peer=%d\n",
+                            state.checkpoint_sync->Replaying() ? "Resuming" : "Starting",
+                            state.checkpoint_sync->Replaying() ? "replay" : "authentication",
+                            state.checkpoint_sync->Height(), pto->GetId());
+                        connman->PushMessage(pto, msgMaker.Make(NetMsgType::GETHEADERS,
+                            state.checkpoint_sync->Replaying() ?
+                                CBlockLocator({state.checkpoint_sync->NextHash(), consensusParams.hashGenesisBlock}) : chainActive.GetLocator(start),
+                            state.checkpoint_sync->StopHash()));
+                    }
+                }
+                if (!state.checkpoint_sync) {
+                    const CBlockIndex *pindexStart = pindexBestHeader;
+                    /* If possible, start at the block preceding the currently
+                       best known header.  This ensures that we always get a
+                       non-empty list of headers back as long as the peer
+                       is up-to-date.  With a non-empty response, we can initialise
+                       the peer's known best block.  This wouldn't be possible
+                       if we requested starting at pindexBestHeader and
+                       got back an empty response.  */
+                    if (pindexStart->pprev)
+                        pindexStart = pindexStart->pprev;
+                    LogPrint(BCLog::NET, "initial getheaders (%d) to peer=%d (startheight:%d)\n", pindexStart->nHeight, pto->GetId(), pto->nStartingHeight);
+                    connman->PushMessage(pto, msgMaker.Make(NetMsgType::GETHEADERS, chainActive.GetLocator(pindexStart), uint256()));
+                }
             }
         }
 
@@ -3537,6 +3700,21 @@ bool PeerLogicValidation::SendMessages(CNode* pto, std::atomic<bool>& interruptM
 
         // Detect whether we're stalling
         nNow = GetTimeMicros();
+
+        // During IBD, a slow peer holding the block at the front of the
+        // download window can temporarily prevent the window from advancing.
+        // Release one stalled request before the full peer-disconnect timeout
+        // so another peer can request it. MarkBlockAsReceived() is also used
+        // for timed-out requests and keeps all in-flight accounting consistent.
+        static const int64_t BLOCK_STALL_REASSIGN_TIMEOUT = 5;
+        if (IsInitialBlockDownload() &&
+            state.nStallingSince &&
+            state.nStallingSince < nNow - 1000000 * BLOCK_STALL_REASSIGN_TIMEOUT &&
+            !state.vBlocksInFlight.empty()) {
+            const uint256 stalledHash = state.vBlocksInFlight.front().hash;
+            MarkBlockAsReceived(stalledHash);
+        }
+
         if (state.nStallingSince && state.nStallingSince < nNow - 1000000 * BLOCK_STALLING_TIMEOUT) {
             // Stalling only triggers when the block download window cannot move. During normal steady state,
             // the download window should be much larger than the to-be-downloaded set of blocks, so disconnection
@@ -3564,6 +3742,15 @@ bool PeerLogicValidation::SendMessages(CNode* pto, std::atomic<bool>& interruptM
                 return true;
             }
         }
+        // Quarantine sessions have their own progress and absolute deadlines,
+        // even when no alternative peer is available or a peer is whitelisted.
+        if (state.checkpoint_sync && GetTime() > state.checkpoint_sync_progress_deadline) {
+            LogPrintf("Timeout authenticating checkpoint headers, disconnecting peer=%d\n", pto->GetId());
+            uiInterface.NotifyCheckpointHeaderProgress(0, 0, 0, false);
+            state.checkpoint_sync.reset();
+            pto->fDisconnect = true;
+            return true;
+        }
         // Check for headers sync timeouts
         if (state.fSyncStarted && state.nHeadersSyncTimeout < std::numeric_limits<int64_t>::max()) {
             // Detect whether this is a stalling initial-headers-sync peer
@@ -3586,6 +3773,9 @@ bool PeerLogicValidation::SendMessages(CNode* pto, std::atomic<bool>& interruptM
                         // getheaders message to be sent to
                         // this peer (eventually).
                         state.fSyncStarted = false;
+                        if (state.checkpoint_sync)
+                            uiInterface.NotifyCheckpointHeaderProgress(0, 0, 0, false);
+                        state.checkpoint_sync.reset();
                         nSyncStarted--;
                         state.nHeadersSyncTimeout = 0;
                     }
@@ -3605,10 +3795,61 @@ bool PeerLogicValidation::SendMessages(CNode* pto, std::atomic<bool>& interruptM
         // Message: getdata (blocks)
         //
         std::vector<CInv> vGetData;
-        if (!pto->fClient && (fFetch || !IsInitialBlockDownload()) && state.nBlocksInFlight < MAX_BLOCKS_IN_TRANSIT_PER_PEER) {
+        const bool fInitialBlockDownload = IsInitialBlockDownload();
+        // Keep deep IBD header-only until the best header is effectively at
+        // the network tip. Mixing thousands of in-flight block responses into
+        // the header-sync connection can otherwise starve header delivery.
+        static const int HEADER_SYNC_TIP_THRESHOLD = 17;
+        const bool fHeadersSynced = pindexBestHeader != nullptr &&
+            pindexBestHeader->GetBlockTime() > GetAdjustedTime() -
+                consensusParams.nPowTargetSpacing * HEADER_SYNC_TIP_THRESHOLD;
+        static const unsigned int MAX_IBD_BLOCKS_IN_FLIGHT_PER_PEER = 2000;
+        static const unsigned int MIN_IBD_BLOCKS_IN_FLIGHT_PER_PEER = 128;
+        static const unsigned int IBD_DELIVERY_TARGET_SECONDS = 2;
+        static const unsigned int IBD_CRITICAL_RANGE_BATCH_LIMIT = 256;
+        const unsigned int nBlocksInFlightLimit = fInitialBlockDownload
+            ? MAX_IBD_BLOCKS_IN_FLIGHT_PER_PEER
+            : MAX_BLOCKS_IN_TRANSIT_PER_PEER;
+        const unsigned int nIBDDeliveryTarget = std::max(
+            MIN_IBD_BLOCKS_IN_FLIGHT_PER_PEER,
+            std::min(MAX_IBD_BLOCKS_IN_FLIGHT_PER_PEER,
+                     static_cast<unsigned int>(state.dIBDBlockDeliveryRateEstimate * IBD_DELIVERY_TARGET_SECONDS)));
+        const unsigned int nBlocksInFlightTarget = fInitialBlockDownload
+            ? nIBDDeliveryTarget
+            : nBlocksInFlightLimit;
+        const unsigned int nIBDRequestBatch = std::min(
+            IBD_CRITICAL_RANGE_BATCH_LIMIT,
+            std::max(1u, nIBDDeliveryTarget / 2));
+        const unsigned int nIBDRefillThreshold = nIBDDeliveryTarget - nIBDRequestBatch;
+        /**
+         * Refill a deep-IBD peer's request queue after one bounded request
+         * batch has drained. FindNextBlocksToDownload walks a
+         * download window of up to BLOCK_DOWNLOAD_WINDOW entries, skipping
+         * blocks which are already present or assigned to another peer.
+         *
+         * Fast peers can still use the full 2,000-block allowance, but no peer
+         * receives more than 256 consecutive new assignments in one round.
+         * Slow or not-yet-measured peers receive only about two seconds of
+         * work. Outside IBD, preserve the original behavior and refill as soon
+         * as any normal in-flight slot is free.
+         */
+        const bool fRefillBlockRequests = fInitialBlockDownload
+            ? static_cast<unsigned int>(state.nBlocksInFlight) <= nIBDRefillThreshold
+            : state.nBlocksInFlight < nBlocksInFlightLimit;
+        if (!pto->fClient && (fFetch || !fInitialBlockDownload) &&
+            (!fInitialBlockDownload || fHeadersSynced) &&
+            fRefillBlockRequests) {
             std::vector<const CBlockIndex*> vToDownload;
             NodeId staller = -1;
-            FindNextBlocksToDownload(pto->GetId(), MAX_BLOCKS_IN_TRANSIT_PER_PEER - state.nBlocksInFlight, vToDownload, staller, consensusParams);
+
+            const unsigned int nBlocksToRequest =
+                fInitialBlockDownload
+                    ? std::min(static_cast<unsigned int>(nBlocksInFlightTarget - state.nBlocksInFlight),
+                               nIBDRequestBatch)
+                    : static_cast<unsigned int>(nBlocksInFlightTarget - state.nBlocksInFlight);
+
+            FindNextBlocksToDownload(pto->GetId(), nBlocksToRequest,
+                                     vToDownload, staller, consensusParams);
             for (const CBlockIndex *pindex : vToDownload) {
                 uint32_t nFetchFlags = GetFetchFlags(pto);
                 vGetData.push_back(CInv(MSG_BLOCK | nFetchFlags, pindex->GetBlockHash()));

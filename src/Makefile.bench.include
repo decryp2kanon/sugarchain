@@ -79,3 +79,12 @@ bitcoin_bench_clean : FORCE
 	 echo "};"; \
 	} > "$@.new" && mv -f "$@.new" "$@"
 	@echo "Generated $@"
+
+# Opt-in historical IBD sampling harness. validation.cpp is compiled only into
+# this test executable, so private validation paths need no production hooks.
+EXTRA_PROGRAMS = bench/ibd_estimate
+bench_ibd_estimate_SOURCES = bench/ibd_estimate.cpp
+bench_ibd_estimate_CPPFLAGS = $(bench_bench_sugarchain_CPPFLAGS)
+bench_ibd_estimate_CXXFLAGS = $(bench_bench_sugarchain_CXXFLAGS)
+bench_ibd_estimate_LDADD = $(bench_bench_sugarchain_LDADD)
+bench_ibd_estimate_LDFLAGS = $(bench_bench_sugarchain_LDFLAGS)

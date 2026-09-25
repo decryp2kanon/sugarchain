@@ -1995,6 +1995,8 @@ void CConnman::OpenNetworkConnection(const CAddress& addrConnect, bool fCountFai
 
 void CConnman::ThreadMessageHandler()
 {
+    static constexpr unsigned int MAX_MESSAGES_PER_PEER_PER_ROUND = 64;
+
     while (!flagInterruptMsgProc)
     {
         std::vector<CNode*> vNodesCopy;
@@ -2013,11 +2015,32 @@ void CConnman::ThreadMessageHandler()
             if (pnode->fDisconnect)
                 continue;
 
-            // Receive messages
-            bool fMoreNodeWork = m_msgproc->ProcessMessages(pnode, flagInterruptMsgProc);
+            /**
+             * Process a bounded batch before running the send path.  During
+             * deep IBD every peer normally has thousands of BLOCK messages
+             * queued, while ProcessMessages intentionally removes only one
+             * message per call.  Calling SendMessages after every individual
+             * block made the comparatively expensive send path consume almost
+             * all of the message-handler thread: measurements showed roughly
+             * 9.4 seconds in SendMessages versus 0.6 seconds receiving during
+             * each 10-second interval.
+             *
+             * A limit of 64 amortizes that fixed send-side work without
+             * draining one peer's entire queue.  The outer loop still visits
+             * every connected peer after each bounded batch, so control
+             * messages and other peers continue to make regular progress.  If
+             * the queue empties, sending becomes paused, disconnection is
+             * requested, or shutdown begins, leave the batch immediately.
+             */
+            bool fMoreNodeWork = false;
+            for (unsigned int n = 0; n < MAX_MESSAGES_PER_PEER_PER_ROUND; ++n) {
+                fMoreNodeWork = m_msgproc->ProcessMessages(pnode, flagInterruptMsgProc);
+                if (flagInterruptMsgProc)
+                    return;
+                if (!fMoreNodeWork || pnode->fPauseSend || pnode->fDisconnect)
+                    break;
+            }
             fMoreWork |= (fMoreNodeWork && !pnode->fPauseSend);
-            if (flagInterruptMsgProc)
-                return;
             // Send messages
             {
                 LOCK(pnode->cs_sendProcessing);

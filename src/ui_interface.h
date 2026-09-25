@@ -106,6 +106,11 @@ public:
     /** Best header has changed */
     boost::signals2::signal<void (bool, const CBlockIndex *)> NotifyHeaderTip;
 
+    /** Read-only checkpoint progress: start, current, target height and replay phase.
+     * target=0 clears the display. Called with cs_main held; subscribers must
+     * enqueue UI work, never wait for it. Updates are batched, not per header. */
+    boost::signals2::signal<void (int, int, int, bool)> NotifyCheckpointHeaderProgress;
+
     /** Banlist did change. */
     boost::signals2::signal<void (void)> BannedListChanged;
 };

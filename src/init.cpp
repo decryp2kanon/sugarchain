@@ -462,6 +462,7 @@ std::string HelpMessage(HelpMessageMode mode)
     strUsage += HelpMessageOpt("-debug=<category>", strprintf(_("Output debugging information (default: %u, supplying <category> is optional)"), 0) + ". " +
         _("If <category> is not supplied or if <category> = 1, output all debugging information.") + " " + _("<category> can be:") + " " + ListLogCategories() + ".");
     strUsage += HelpMessageOpt("-debugexclude=<category>", strprintf(_("Exclude debugging information for a category. Can be used in conjunction with -debug=1 to output debug logs for all categories except one or more specified categories.")));
+    strUsage += HelpMessageOpt("-fast-ibd=<0|1>", _("Authenticate historical headers to hard-coded checkpoints before indexing; verify other PoW in parallel and reuse checked results. Set to 0 to verify historical PoW too (default: 1)"));
     strUsage += HelpMessageOpt("-help-debug", _("Show all debugging options (usage: --help -help-debug)"));
     strUsage += HelpMessageOpt("-logips", strprintf(_("Include IP addresses in debug output (default: %u)"), DEFAULT_LOGIPS));
     strUsage += HelpMessageOpt("-logtimestamps", strprintf(_("Prepend debug output with timestamp (default: %u)"), DEFAULT_LOGTIMESTAMPS));
@@ -1263,6 +1264,14 @@ bool AppInitMain()
     if (nScriptCheckThreads) {
         for (int i=0; i<nScriptCheckThreads-1; i++)
             threadGroup.create_thread(&ThreadScriptCheck);
+    }
+
+    if (gArgs.GetBoolArg("-fast-ibd", true)) {
+        const int workers = std::max(1, std::min(8, GetNumCores()));
+        LogPrintf("Fast IBD authenticates historical PoW to hard-coded checkpoints; use -fast-ibd=0 to verify historical PoW independently\n");
+        LogPrintf("Using %d threads for header proof-of-work verification\n", workers);
+        for (int i = 1; i < workers; ++i)
+            threadGroup.create_thread(&ThreadHeaderPoWCheck);
     }
 
     // Start the lightweight task scheduler thread

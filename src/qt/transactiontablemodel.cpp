@@ -4,6 +4,8 @@
 
 #include <qt/transactiontablemodel.h>
 
+#include <boost/bind.hpp>
+
 #include <qt/addresstablemodel.h>
 #include <qt/guiconstants.h>
 #include <qt/guiutil.h>
