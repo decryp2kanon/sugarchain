@@ -1265,6 +1265,10 @@ bool AppInitMain()
             threadGroup.create_thread(&ThreadScriptCheck);
     }
 
+    if (gArgs.GetBoolArg("-fast-ibd", true)) {
+        LogPrintf("Fast IBD authenticates historical PoW to hard-coded checkpoints; use -fast-ibd=0 to verify historical PoW independently\n");
+    }
+
     // Start the lightweight task scheduler thread
     CScheduler::Function serviceLoop = boost::bind(&CScheduler::serviceQueue, &scheduler);
     threadGroup.create_thread(boost::bind(&TraceThread<CScheduler::Function>, "scheduler", serviceLoop));

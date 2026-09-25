@@ -163,7 +163,7 @@ public:
 
     bool ActivateBestChain(CValidationState &state, const CChainParams& chainparams, std::shared_ptr<const CBlock> pblock);
 
-    bool AcceptBlockHeader(const CBlockHeader& block, CValidationState& state, const CChainParams& chainparams, CBlockIndex** ppindex);
+    bool AcceptBlockHeader(const CBlockHeader& block, CValidationState& state, const CChainParams& chainparams, CBlockIndex** ppindex, bool checkpoint_authenticated = false);
     bool AcceptBlock(const std::shared_ptr<const CBlock>& pblock, CValidationState& state, const CChainParams& chainparams, CBlockIndex** ppindex, bool fRequested, const CDiskBlockPos* dbp, bool* fNewBlock);
 
     // Block (dis)connection on a given view:
@@ -1105,9 +1105,20 @@ static bool WriteBlockToDisk(const CBlock& block, CDiskBlockPos& pos, const CMes
     return true;
 }
 
-bool ReadBlockFromDisk(CBlock& block, const CDiskBlockPos& pos, const Consensus::Params& consensusParams)
+static bool CheckProofOfWorkMeasured(const CBlockHeader& block, const Consensus::Params& consensusParams);
+
+static bool ReadBlockFromDiskInternal(CBlock& block, const CDiskBlockPos& pos,
+                                     const Consensus::Params& consensusParams,
+                                     const uint256* expectedHash)
 {
     block.SetNull();
+    {
+        LOCK(block.cache_lock);
+        // CBlock::SetNull() does not reset the object-local PoW cache.
+        block.cache_init = false;
+        block.cache_block_hash.SetNull();
+        block.cache_PoW_hash.SetNull();
+    }
 
     // Open history file to read
     CAutoFile filein(OpenBlockFile(pos, true), SER_DISK, CLIENT_VERSION);
@@ -1122,27 +1133,36 @@ bool ReadBlockFromDisk(CBlock& block, const CDiskBlockPos& pos, const Consensus:
         return error("%s: Deserialize or I/O error - %s at %s", __func__, e.what(), pos.ToString());
     }
 
+    if (expectedHash) {
+        const uint256 actualHash = block.GetHash();
+        if (actualHash != *expectedHash)
+            return error("ReadBlockFromDisk: Header hash doesn't match index at %s", pos.ToString());
+    }
+
     // Check the header
-    if (!CheckProofOfWork(block.GetPoWHash_cached(), block.nBits, consensusParams))
+    if (!CheckProofOfWorkMeasured(block, consensusParams))
         return error("ReadBlockFromDisk: Errors in block header at %s", pos.ToString());
 
     return true;
 }
 
+bool ReadBlockFromDisk(CBlock& block, const CDiskBlockPos& pos, const Consensus::Params& consensusParams)
+{
+    // Without a trusted index snapshot, retain the normal PoW calculation.
+    return ReadBlockFromDiskInternal(block, pos, consensusParams, nullptr);
+}
+
 bool ReadBlockFromDisk(CBlock& block, const CBlockIndex* pindex, const Consensus::Params& consensusParams)
 {
     CDiskBlockPos blockPos;
+    uint256 expectedHash;
     {
         LOCK(cs_main);
         blockPos = pindex->GetBlockPos();
+        expectedHash = pindex->GetBlockHash();
     }
 
-    if (!ReadBlockFromDisk(block, blockPos, consensusParams))
-        return false;
-    if (block.GetHash() != pindex->GetBlockHash())
-        return error("ReadBlockFromDisk(CBlock&, CBlockIndex*): GetHash() doesn't match index for %s at %s",
-                pindex->ToString(), pindex->GetBlockPos().ToString());
-    return true;
+    return ReadBlockFromDiskInternal(block, blockPos, consensusParams, &expectedHash);
 }
 
 CAmount GetBlockSubsidy(int nHeight, const Consensus::Params& consensusParams)
@@ -3043,18 +3063,45 @@ static bool FindUndoPos(CValidationState &state, int nFile, CDiskBlockPos &pos, 
     return true;
 }
 
+// Reuse only evidence tied to this exact SHA256d header (which includes nBits).
+// A TREE-valid index alone is not evidence: older fast-IBD versions populated
+// it without checking PoW. The database is trusted local state, as with script
+// validation status; peer messages cannot serialize these evidence bits.
+static bool HaveHeaderProof(const CBlockHeader& block, const Consensus::Params& params)
+{
+    AssertLockHeld(cs_main);
+    if (fReindex || fImporting || !CheckProofOfWork(uint256(), block.nBits, params))
+        return false;
+    const auto it = mapBlockIndex.find(block.GetHash());
+    if (it == mapBlockIndex.end()) return false;
+    if (it->second->nStatus & BLOCK_POW_CHECKED) return true;
+    return gArgs.GetBoolArg("-fast-ibd", true) && fCheckpointsEnabled &&
+           (it->second->nStatus & BLOCK_CHECKPOINT_CHECKED);
+}
+
+static bool CheckProofOfWorkMeasured(const CBlockHeader& block, const Consensus::Params& consensusParams)
+{
+    {
+        LOCK(cs_main);
+        if (HaveHeaderProof(block, consensusParams)) return true;
+    }
+    if (!CheckProofOfWork(block.GetPoWHash_cached(), block.nBits, consensusParams)) return false;
+    {
+        LOCK(cs_main);
+        const auto it = mapBlockIndex.find(block.GetHash());
+        if (it != mapBlockIndex.end() && !(it->second->nStatus & BLOCK_POW_CHECKED)) {
+            it->second->nStatus |= BLOCK_POW_CHECKED;
+            setDirtyBlockIndex.insert(it->second);
+        }
+    }
+    return true;
+}
+
 static bool CheckBlockHeader(const CBlockHeader& block, CValidationState& state, const Consensus::Params& consensusParams, bool fCheckPOW = true)
 {
     // Check proof of work matches claimed amount
-    if (fCheckPOW && !CheckProofOfWork(block.GetPoWHash_cached(), block.nBits, consensusParams))
+    if (fCheckPOW && !CheckProofOfWorkMeasured(block, consensusParams))
         return state.DoS(50, false, REJECT_INVALID, "high-hash", false, "proof of work failed");
-
-    // FIXME.SUGAR // check PoW: SKIPPED during downloading headers (IBD)
-    // You can see this log when IBD.
-    // This means PoW check during IBD is not actually skipped, but still its checking in another places.
-    // What we skipped is only when Downloading headers, but not else. This makes IBD much faster.
-    // if (IsInitialBlockDownload())
-    //     printf("%s IBD=%d CBH=%s\n", DateTimeStrFormat("%Y-%m-%d %H:%M:%S", GetTime()).c_str(), IsInitialBlockDownload(), block.GetHash().ToString().c_str());
 
     return true;
 }
@@ -3063,14 +3110,12 @@ bool CheckBlock(const CBlock& block, CValidationState& state, const Consensus::P
 {
     // These are checks that are independent of context.
 
-    if (block.fChecked)
-        return true;
-
-    // FIXME.SUGAR // check PoW: SKIPPED during downloading headers (IBD)
-    // Check that the header is valid (particularly PoW).  This is mostly
-    // redundant with the call in AcceptBlockHeader, but when IBD mode, its SKIPPED.
+    // Even an object previously checked in checkpoint mode must obey a later
+    // full-validation request. fChecked alone does not certify actual PoW.
     if (!CheckBlockHeader(block, state, consensusParams, fCheckPOW))
         return false;
+    if (block.fChecked)
+        return true;
 
     // Check the merkle root.
     if (fCheckMerkleRoot) {
@@ -3206,6 +3251,11 @@ static bool ContextualCheckBlockHeader(const CBlockHeader& block, CValidationSta
 
     // Check against checkpoints
     if (fCheckpointsEnabled) {
+        // Checkpoint heights must match exactly. This prevents an unverified
+        // header fork from manufacturing its own fast-IBD trust anchor.
+        if (!Checkpoints::CheckBlock(nHeight, block.GetHash(), params.Checkpoints()))
+            return state.DoS(100, error("%s: rejected by checkpoint lock-in at height %d", __func__, nHeight), REJECT_CHECKPOINT, "checkpoint mismatch");
+
         // Don't accept any forks from the main chain prior to last checkpoint.
         // GetLastCheckpoint finds the last checkpoint in MapCheckpoints that's in our
         // MapBlockIndex.
@@ -3325,7 +3375,7 @@ static bool ContextualCheckBlock(const CBlock& block, CValidationState& state, c
     return true;
 }
 
-bool CChainState::AcceptBlockHeader(const CBlockHeader& block, CValidationState& state, const CChainParams& chainparams, CBlockIndex** ppindex)
+bool CChainState::AcceptBlockHeader(const CBlockHeader& block, CValidationState& state, const CChainParams& chainparams, CBlockIndex** ppindex, bool checkpoint_authenticated)
 {
     AssertLockHeld(cs_main);
     // Check for duplicate
@@ -3341,12 +3391,13 @@ bool CChainState::AcceptBlockHeader(const CBlockHeader& block, CValidationState&
                 *ppindex = pindex;
             if (pindex->nStatus & BLOCK_FAILED_MASK)
                 return state.Invalid(error("%s: block %s is marked invalid", __func__, hash.ToString()), 0, "duplicate");
-            return true;
+            return CheckBlockHeader(block, state, chainparams.GetConsensus());
         }
 
-        // FIXME.SUGAR // check PoW: SKIPPED during downloading headers (IBD)
-        // IBD: do not check PoW (Yespower) during Download headers for performance reason
-        if (!IsInitialBlockDownload() && !CheckBlockHeader(block, state, chainparams.GetConsensus()))
+        // Authentication is supplied only by the completed checkpoint proof's
+        // replay pass. All other headers, including post-checkpoint headers,
+        // must prove their work before AddToBlockIndex/chain selection.
+        if (!checkpoint_authenticated && !CheckBlockHeader(block, state, chainparams.GetConsensus()))
             return error("%s: Consensus::CheckBlockHeader: %s, %s", __func__, hash.ToString(), FormatStateMessage(state));
 
         // Get prev block index
@@ -3375,8 +3426,11 @@ bool CChainState::AcceptBlockHeader(const CBlockHeader& block, CValidationState&
             }
         }
     }
-    if (pindex == nullptr)
+    if (pindex == nullptr) {
         pindex = AddToBlockIndex(block);
+        if (hash != chainparams.GetConsensus().hashGenesisBlock)
+            pindex->nStatus |= checkpoint_authenticated ? BLOCK_CHECKPOINT_CHECKED : BLOCK_POW_CHECKED;
+    }
 
     if (ppindex)
         *ppindex = pindex;
@@ -3387,14 +3441,15 @@ bool CChainState::AcceptBlockHeader(const CBlockHeader& block, CValidationState&
 }
 
 // Exposed wrapper for AcceptBlockHeader
-bool ProcessNewBlockHeaders(const std::vector<CBlockHeader>& headers, CValidationState& state, const CChainParams& chainparams, const CBlockIndex** ppindex, CBlockHeader *first_invalid)
+bool ProcessNewBlockHeaders(const std::vector<CBlockHeader>& headers, CValidationState& state, const CChainParams& chainparams, const CBlockIndex** ppindex, CBlockHeader *first_invalid, const Checkpoints::HeaderSync* checkpoint_sync)
 {
     if (first_invalid != nullptr) first_invalid->SetNull();
     {
         LOCK(cs_main);
+        const bool use_checkpoint = gArgs.GetBoolArg("-fast-ibd", true) && fCheckpointsEnabled && !fReindex && !fImporting;
         for (const CBlockHeader& header : headers) {
             CBlockIndex *pindex = nullptr; // Use a temp pindex instead of ppindex to avoid a const_cast
-            if (!g_chainstate.AcceptBlockHeader(header, state, chainparams, &pindex)) {
+            if (!g_chainstate.AcceptBlockHeader(header, state, chainparams, &pindex, use_checkpoint && checkpoint_sync && checkpoint_sync->Authenticates(header.GetHash(), chainparams.Checkpoints()))) {
                 if (first_invalid) *first_invalid = header;
                 return false;
             }
@@ -3517,33 +3572,18 @@ bool ProcessNewBlock(const CChainParams& chainparams, const std::shared_ptr<cons
 {
     AssertLockNotHeld(cs_main);
 
-    // Look for this block's header in the index like AcceptBlock() will
-    uint256 hash = pblock->GetHash();
-
-    {
-        LOCK(cs_main);
-
-        BlockMap::iterator miSelf = mapBlockIndex.find(hash);
-        CBlockIndex *pindex = NULL;
-        if (miSelf != mapBlockIndex.end()) {
-            // Block header is already known
-            pindex = miSelf->second;
-            if (!pblock->cache_init && pindex->cache_init) {
-                LOCK(pblock->cache_lock); // Probably unnecessary since no concurrent access to pblock is expected
-                pblock->cache_init = true;
-                pblock->cache_block_hash = pindex->cache_block_hash;
-                pblock->cache_PoW_hash = pindex->cache_PoW_hash;
-            }
-        }
-    }
-
     {
         CBlockIndex *pindex = nullptr;
         if (fNewBlock) *fNewBlock = false;
         CValidationState state;
+        // The shared check also protects compact blocks, disk reads and
+        // direct CheckBlock callers; no ingress path may rely on IBD alone.
+        bool ret = CheckBlockHeader(*pblock, state, chainparams.GetConsensus());
         // Ensure that CheckBlock() passes before calling AcceptBlock, as
         // belt-and-suspenders.
-        bool ret = CheckBlock(*pblock, state, chainparams.GetConsensus());
+        if (ret) {
+            ret = CheckBlock(*pblock, state, chainparams.GetConsensus());
+        }
 
         LOCK(cs_main);
 
@@ -3810,6 +3850,7 @@ CBlockIndex * CChainState::InsertBlockIndex(const uint256& hash)
 
 bool CChainState::LoadBlockIndex(const Consensus::Params& consensus_params, CBlockTreeDB& blocktree)
 {
+    LOCK(cs_main);
     if (!blocktree.LoadBlockIndexGuts(consensus_params, [this](const uint256& hash){ return this->InsertBlockIndex(hash); }))
         return false;
 
@@ -3856,6 +3897,41 @@ bool CChainState::LoadBlockIndex(const Consensus::Params& consensus_params, CBlo
         if (pindex->IsValid(BLOCK_VALID_TREE) && (pindexBestHeader == nullptr || CBlockIndexWorkComparator()(pindexBestHeader, pindex)))
             pindexBestHeader = pindex;
     }
+
+    // Upgrade legacy indexes before their claimed work can drive networking,
+    // assume-valid or activation. A prior TREE flag is not a PoW certificate.
+    // Checkpoint evidence survives restart mid-replay; full mode audits it.
+    std::vector<CBlockHeader> pending;
+    auto verify_pending = [&]() {
+        if (ShutdownRequested()) return false;
+        for (const auto& header : pending) {
+            if (!CheckProofOfWorkMeasured(header, consensus_params))
+                return error("Unverified legacy header has invalid PoW (%s); rebuild with -reindex", header.GetHash().ToString());
+        }
+        pending.clear();
+        return true;
+    };
+    const bool use_checkpoint = gArgs.GetBoolArg("-fast-ibd", true) && fCheckpointsEnabled && !fReindex && !fImporting;
+    const CBlockIndex* anchor = use_checkpoint ? Checkpoints::GetLastCheckpoint(Params().Checkpoints()) : nullptr;
+    size_t upgraded = 0;
+    for (const auto& item : vSortedByHeight) {
+        CBlockIndex* pindex = item.second;
+        if (pindex->GetBlockHash() == consensus_params.hashGenesisBlock ||
+            (pindex->nStatus & BLOCK_POW_CHECKED) ||
+            (use_checkpoint && (pindex->nStatus & BLOCK_CHECKPOINT_CHECKED))) continue;
+        if (anchor && pindex->nHeight <= anchor->nHeight && anchor->GetAncestor(pindex->nHeight) == pindex) {
+            pindex->nStatus |= BLOCK_CHECKPOINT_CHECKED;
+            setDirtyBlockIndex.insert(pindex);
+        } else {
+            pending.push_back(pindex->GetBlockHeader());
+            if (pending.size() == MAX_HEADERS_RESULTS && !verify_pending()) return false;
+        }
+        if (++upgraded % 100000 == 0) {
+            LogPrintf("Validating legacy header evidence: %u entries\n", upgraded);
+            boost::this_thread::interruption_point();
+        }
+    }
+    if (!verify_pending()) return false;
 
     return true;
 }
