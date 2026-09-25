@@ -3034,7 +3034,9 @@ bool PeerLogicValidation::ProcessMessages(CNode* pfrom, std::atomic<bool>& inter
         LOCK(pfrom->cs_vProcessMsg);
         if (pfrom->vProcessMsg.empty())
             return false;
-        // Just take one message
+        // Process messages in receive order. Scanning the entire queue for a
+        // HEADERS message on every call becomes quadratic when a deep IBD
+        // block pipeline leaves thousands of BLOCK messages queued.
         msgs.splice(msgs.begin(), pfrom->vProcessMsg, pfrom->vProcessMsg.begin());
         pfrom->nProcessQueueSize -= msgs.front().vRecv.size() + CMessageHeader::HEADER_SIZE;
         pfrom->fPauseRecv = pfrom->nProcessQueueSize > connman->GetReceiveFloodSize();
