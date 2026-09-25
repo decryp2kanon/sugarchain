@@ -413,6 +413,49 @@ BOOST_AUTO_TEST_CASE(checkpoint_presync_rejects_forks_and_replay_equivocation)
     BOOST_CHECK_EQUAL(oversized.Height(), 0);
 }
 
+BOOST_AUTO_TEST_CASE(checkpoint_replay_resume_requires_accepted_commitments)
+{
+    FastIBDOptions options;
+    const auto headers = HeaderChain(4003);
+    const CCheckpointData checkpoints{{{4003, headers.back().GetHash()}}};
+    CheckpointTestParams params(checkpoints);
+    Checkpoints::HeaderSync sync(0, Params().GenesisBlock().GetHash(), checkpoints);
+    std::vector<CBlockHeader> out;
+    LOCK(cs_main);
+    BOOST_CHECK(!sync.Resume(checkpoints)); // Unauthenticated presync is not reusable.
+    BOOST_REQUIRE(sync.Process({headers.begin(), headers.begin() + 2000}, out));
+    BOOST_REQUIRE(sync.Process({headers.begin() + 2000, headers.begin() + 4000}, out));
+    BOOST_REQUIRE(sync.Process({headers.begin() + 4000, headers.end()}, out));
+    const Checkpoints::HeaderSync snapshot(sync);
+    BOOST_CHECK(!snapshot.Resume(CCheckpointData{{{4003, uint256S("1234")}}}));
+    BOOST_REQUIRE(sync.Process({headers.begin(), headers.begin() + 2000}, out));
+    // Authentication alone is insufficient to skip contextual index admission.
+    BOOST_REQUIRE(snapshot.Resume(checkpoints));
+    BOOST_CHECK_EQUAL(snapshot.Resume(checkpoints)->Height(), 0);
+    CValidationState state;
+    BOOST_REQUIRE(ProcessNewBlockHeaders(out, state, params, nullptr, nullptr, &sync));
+    auto resumed = snapshot.Resume(checkpoints);
+    BOOST_REQUIRE(resumed);
+    BOOST_CHECK_EQUAL(resumed->Height(), 2000);
+    BOOST_CHECK(resumed->NextHash() == headers[1999].GetHash());
+    BOOST_CHECK(!resumed->Authenticates(headers[0].GetHash(), checkpoints));
+
+    auto* accepted = mapBlockIndex.at(headers[1999].GetHash());
+    const auto status = accepted->nStatus;
+    accepted->nStatus &= ~BLOCK_CHECKPOINT_CHECKED;
+    BOOST_CHECK_EQUAL(snapshot.Resume(checkpoints)->Height(), 0);
+    accepted->nStatus = status | BLOCK_FAILED_VALID;
+    BOOST_CHECK_EQUAL(snapshot.Resume(checkpoints)->Height(), 0);
+    accepted->nStatus = status;
+
+    BOOST_REQUIRE(resumed->Process({headers.begin() + 2000, headers.begin() + 4000}, out));
+    BOOST_REQUIRE(ProcessNewBlockHeaders(out, state, params, nullptr, nullptr, resumed.get()));
+    BOOST_REQUIRE(resumed->Process({headers.begin() + 4000, headers.end()}, out));
+    BOOST_REQUIRE(ProcessNewBlockHeaders(out, state, params, nullptr, nullptr, resumed.get()));
+    BOOST_CHECK_EQUAL(pindexBestHeader->nHeight, 4003);
+    BOOST_CHECK(!snapshot.Resume(checkpoints)); // No historical replay after completion.
+}
+
 BOOST_AUTO_TEST_CASE(checkpoint_proof_never_disables_other_validation_or_full_mode)
 {
     FastIBDOptions options;
@@ -506,14 +549,14 @@ BOOST_AUTO_TEST_CASE(header_pow_evidence_is_exact_and_parallel_validation_is_ord
 BOOST_AUTO_TEST_CASE(checkpoint_authentication_through_p2p_headers_messages)
 {
     FastIBDOptions options;
-    const auto headers = HeaderChain(2003);
+    const auto headers = HeaderChain(8003);
     auto& checkpoints = const_cast<CCheckpointData&>(Params().Checkpoints());
     struct RestoreCheckpoints {
         CCheckpointData& ref;
         CCheckpointData original;
         ~RestoreCheckpoints() { ref = original; }
     } restore{checkpoints, checkpoints};
-    checkpoints = {{{510, headers[509].GetHash()}, {2003, headers.back().GetHash()}}};
+    checkpoints = {{{510, headers[509].GetHash()}, {8003, headers.back().GetHash()}}};
     CConnman::Options conn_options;
     conn_options.nSendBufferMaxSize = 4 * 1024 * 1024;
     conn_options.nReceiveFloodSize = 4 * 1024 * 1024;
@@ -521,7 +564,12 @@ BOOST_AUTO_TEST_CASE(checkpoint_authentication_through_p2p_headers_messages)
     CService service;
     BOOST_REQUIRE(Lookup("250.1.1.1", service, 18444, false));
     CAddress addr(service, NODE_NETWORK);
-    for (int scenario : {0, 1, 2}) {
+    const int64_t start_time = GetTime();
+    SetMockTime(start_time);
+    struct RestoreTime { ~RestoreTime() { SetMockTime(0); } } restore_time;
+    // Bad presync, stalled presync, absolute presync timeout, healthy long
+    // replay, equivocating replacement, partial-packet peer loss, completion.
+    for (int scenario : {0, 1, 6, 2, 3, 4, 5}) {
         CNode peer(12345 + scenario, ServiceFlags(NODE_NETWORK | NODE_WITNESS), 0, INVALID_SOCKET, addr, 0, 0, CAddress(), "", false);
         peer.SetSendVersion(PROTOCOL_VERSION);
         peerLogic->InitializeNode(&peer);
@@ -556,9 +604,68 @@ BOOST_AUTO_TEST_CASE(checkpoint_authentication_through_p2p_headers_messages)
         if (scenario == 1) {
             SetMockTime(GetTime() + 61);
             { LOCK(peer.cs_sendProcessing); peerLogic->SendMessages(&peer, interrupt); }
-            SetMockTime(0);
+            SetMockTime(start_time);
             BOOST_CHECK(peer.fDisconnect);
             BOOST_CHECK_EQUAL(mapBlockIndex.size(), 1U);
+            continue;
+        }
+        if (scenario == 6) {
+            SetMockTime(start_time + 4 * 60 * 60 + 1);
+            receive({headers.begin(), headers.begin() + 2000});
+            { LOCK(peer.cs_sendProcessing); peerLogic->SendMessages(&peer, interrupt); }
+            BOOST_CHECK(peer.fDisconnect); // Progress cannot extend unauthenticated presync.
+            BOOST_CHECK_EQUAL(mapBlockIndex.size(), 1U);
+            SetMockTime(start_time);
+            continue;
+        }
+        if (scenario >= 3) {
+            // The replacement request must start at the last accepted chunk,
+            // not checkpoint 510, genesis, or the previous partial packet.
+            bool found_request = false;
+            for (size_t i = 0; i + 1 < peer.vSendMsg.size(); ++i) {
+                if (peer.vSendMsg[i].size() != CMessageHeader::HEADER_SIZE) continue;
+                CDataStream envelope(peer.vSendMsg[i], SER_NETWORK, PROTOCOL_VERSION);
+                CMessageHeader header(Params().MessageStart());
+                envelope >> header;
+                if (header.GetCommand() != NetMsgType::GETHEADERS) continue;
+                CDataStream payload(peer.vSendMsg[i + 1], SER_NETWORK, PROTOCOL_VERSION);
+                CBlockLocator locator;
+                uint256 stop;
+                payload >> locator >> stop;
+                BOOST_REQUIRE(!locator.vHave.empty());
+                BOOST_CHECK(locator.vHave.front() == headers[3999].GetHash());
+                BOOST_CHECK(stop == headers.back().GetHash());
+                found_request = true;
+            }
+            BOOST_REQUIRE(found_request);
+            if (scenario == 3) {
+                auto fork = std::vector<CBlockHeader>(headers.begin() + 4000, headers.begin() + 6000);
+                ++fork[0].nNonce;
+                for (size_t i = 1; i < fork.size(); ++i) fork[i].hashPrevBlock = fork[i - 1].GetHash();
+                receive(fork);
+                BOOST_CHECK(peer.fDisconnect);
+                BOOST_CHECK_EQUAL(pindexBestHeader->nHeight, 4000);
+                BOOST_CHECK_EQUAL(mapBlockIndex.size(), 4001U);
+                continue;
+            }
+            if (scenario == 4) {
+                receive({headers.begin() + 4000, headers.begin() + 4017});
+                BOOST_CHECK_EQUAL(pindexBestHeader->nHeight, 4000);
+                continue; // FinalizeNode with a still-unverified partial chunk.
+            }
+            receive({headers.begin() + 4000, headers.begin() + 6000});
+            BOOST_CHECK_EQUAL(pindexBestHeader->nHeight, 6000); // No second presync.
+            receive({headers.begin() + 6000, headers.begin() + 8000});
+            receive({headers.begin() + 8000, headers.end()});
+            BOOST_CHECK_EQUAL(pindexBestHeader->nHeight, 8003);
+            BOOST_CHECK(!peer.fDisconnect);
+            CBlockHeader invalid = headers.back();
+            invalid.hashPrevBlock = invalid.GetHash();
+            invalid.nTime++;
+            MakeInvalidPoW(invalid);
+            receive({invalid});
+            BOOST_CHECK_EQUAL(pindexBestHeader->nHeight, 8003);
+            BOOST_CHECK(!mapBlockIndex.count(invalid.GetHash()));
             continue;
         }
         if (scenario == 0) {
@@ -579,25 +686,25 @@ BOOST_AUTO_TEST_CASE(checkpoint_authentication_through_p2p_headers_messages)
             receive({headers.begin(), headers.begin() + 2000}, &unsolicited);
             BOOST_CHECK_EQUAL(mapBlockIndex.size(), 1U);
         }
-        receive({headers.begin(), headers.begin() + 2000});
-        BOOST_CHECK_EQUAL(mapBlockIndex.size(), 1U);
-        BOOST_CHECK(!peer.fDisconnect);
-        receive({headers.begin() + 2000, headers.end()});
-        BOOST_CHECK_EQUAL(mapBlockIndex.size(), 1U);
-        BOOST_CHECK(!peer.fDisconnect);
+        for (size_t i = 0; i < headers.size(); i += 2000) {
+            receive({headers.begin() + i, headers.begin() + std::min(i + 2000, headers.size())});
+            BOOST_CHECK_EQUAL(mapBlockIndex.size(), 1U);
+            BOOST_CHECK(!peer.fDisconnect);
+        }
         receive({headers.begin(), headers.begin() + 2000});
         BOOST_CHECK_EQUAL(pindexBestHeader->nHeight, 2000);
+        // Reproduce the observed trigger: useful replay crosses the original
+        // four-hour session deadline. It must not disconnect a progressing peer.
+        SetMockTime(start_time + 4 * 60 * 60 + 1);
+        receive({headers.begin() + 2000, headers.begin() + 4000});
+        { LOCK(peer.cs_sendProcessing); peerLogic->SendMessages(&peer, interrupt); }
+        BOOST_CHECK_EQUAL(pindexBestHeader->nHeight, 4000);
         BOOST_CHECK(!peer.fDisconnect);
-        receive({headers.begin() + 2000, headers.end()});
-        BOOST_CHECK_EQUAL(pindexBestHeader->nHeight, 2003);
-        BOOST_CHECK(!peer.fDisconnect);
-        CBlockHeader invalid = headers.back();
-        invalid.hashPrevBlock = invalid.GetHash();
-        invalid.nTime++;
-        MakeInvalidPoW(invalid);
-        receive({invalid});
-        BOOST_CHECK_EQUAL(pindexBestHeader->nHeight, 2003);
-        BOOST_CHECK(!mapBlockIndex.count(invalid.GetHash()));
+        receive({headers.begin() + 4000, headers.begin() + 4023});
+        BOOST_CHECK_EQUAL(pindexBestHeader->nHeight, 4000);
+        SetMockTime(GetTime() + 61);
+        { LOCK(peer.cs_sendProcessing); peerLogic->SendMessages(&peer, interrupt); }
+        BOOST_CHECK(peer.fDisconnect); // Replay still cannot stall indefinitely.
     }
 }
 

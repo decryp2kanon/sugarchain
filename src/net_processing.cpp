@@ -282,6 +282,10 @@ struct CNodeState {
 /** Map maintaining per-node state. Requires cs_main. */
 std::map<NodeId, CNodeState> mapNodeState;
 
+// One immutable, endpoint-authenticated snapshot, independent of peer lifetime.
+// It contains hashes, not block-index pointers or unverified replay packets.
+static std::shared_ptr<const Checkpoints::HeaderSync> checkpoint_replay GUARDED_BY(cs_main);
+
 // Requires cs_main.
 CNodeState *State(NodeId pnode) {
     std::map<NodeId, CNodeState>::iterator it = mapNodeState.find(pnode);
@@ -837,6 +841,7 @@ static bool BlockRequestAllowed(const CBlockIndex* pindex, const Consensus::Para
 PeerLogicValidation::PeerLogicValidation(CConnman* connmanIn, CScheduler &scheduler) : connman(connmanIn), m_stale_tip_check_time(0) {
     // Initialize global variables that cannot be constructed at startup.
     recentRejects.reset(new CRollingBloomFilter(120000, 0.000001));
+    { LOCK(cs_main); checkpoint_replay.reset(); }
 
     const Consensus::Params& consensusParams = Params().GetConsensus();
     // Stale tip checking and peer eviction are on two different timers, but we
@@ -1346,13 +1351,16 @@ bool static ProcessHeadersMessage(CNode *pfrom, CConnman *connman, const std::ve
                 pfrom->fDisconnect = true;
                 return false;
             }
-            // Bound stalls independently of the much larger historical-header
-            // timeout. Valid progress may continue, but cannot grow the index.
-            nodestate->checkpoint_sync_progress_deadline = std::min<int64_t>(nodestate->checkpoint_sync_deadline, GetTime() + 60);
+            // Only unauthenticated presync has an absolute lifetime limit.
+            // Authenticated replay still has to make progress every 60 seconds.
+            nodestate->checkpoint_sync_progress_deadline = checkpoint_sync->Replaying() ? GetTime() + 60 :
+                std::min<int64_t>(nodestate->checkpoint_sync_deadline, GetTime() + 60);
             if (was_replaying == checkpoint_sync->Replaying() && previous_height / 100000 != checkpoint_sync->Height() / 100000)
                 LogPrintf("Checkpoint header %s height=%d peer=%d\n", was_replaying ? "replay" : "presync", checkpoint_sync->Height(), pfrom->GetId());
-            if (!was_replaying && checkpoint_sync->Replaying())
+            if (!was_replaying && checkpoint_sync->Replaying()) {
+                checkpoint_replay = std::make_shared<const Checkpoints::HeaderSync>(*checkpoint_sync);
                 LogPrintf("Checkpoint header commitments authenticated; replaying peer=%d\n", pfrom->GetId());
+            }
             if (headers.empty()) {
                 connman->PushMessage(pfrom, msgMaker.Make(NetMsgType::GETHEADERS,
                     CBlockLocator({checkpoint_sync->NextHash(), chainparams.GetConsensus().hashGenesisBlock}), checkpoint_sync->StopHash()));
@@ -1485,6 +1493,7 @@ bool static ProcessHeadersMessage(CNode *pfrom, CConnman *connman, const std::ve
         if (checkpoint_sync) {
             if (checkpoint_sync->Complete()) {
                 nodestate->checkpoint_sync.reset();
+                checkpoint_replay.reset();
                 LogPrintf("Checkpoint header replay complete at height=%d peer=%d\n", pindexLast->nHeight, pfrom->GetId());
                 // Continue with real PoW verification beyond the checkpoint.
                 connman->PushMessage(pfrom, msgMaker.Make(NetMsgType::GETHEADERS, chainActive.GetLocator(pindexLast), uint256()));
@@ -3360,12 +3369,20 @@ bool PeerLogicValidation::SendMessages(CNode* pto, std::atomic<bool>& interruptM
                     const CBlockIndex* start = Checkpoints::GetLastCheckpoint(checkpoints);
                     if (!start) start = chainActive.Genesis();
                     if (start && start->nHeight < checkpoints.mapCheckpoints.rbegin()->first) {
-                        state.checkpoint_sync = std::make_shared<Checkpoints::HeaderSync>(start->nHeight, start->GetBlockHash(), checkpoints);
+                        if (checkpoint_replay) state.checkpoint_sync = checkpoint_replay->Resume(checkpoints);
+                        if (!state.checkpoint_sync)
+                            state.checkpoint_sync = std::make_shared<Checkpoints::HeaderSync>(start->nHeight, start->GetBlockHash(), checkpoints);
                         state.checkpoint_sync_deadline = GetTime() + 4 * 60 * 60;
                         state.checkpoint_sync_progress_deadline = GetTime() + 60;
                         state.nHeadersSyncTimeout = std::numeric_limits<int64_t>::max();
-                        LogPrintf("Starting checkpoint header authentication from height=%d peer=%d\n", start->nHeight, pto->GetId());
-                        connman->PushMessage(pto, msgMaker.Make(NetMsgType::GETHEADERS, chainActive.GetLocator(start), state.checkpoint_sync->StopHash()));
+                        LogPrintf("%s checkpoint header %s from height=%d peer=%d\n",
+                            state.checkpoint_sync->Replaying() ? "Resuming" : "Starting",
+                            state.checkpoint_sync->Replaying() ? "replay" : "authentication",
+                            state.checkpoint_sync->Height(), pto->GetId());
+                        connman->PushMessage(pto, msgMaker.Make(NetMsgType::GETHEADERS,
+                            state.checkpoint_sync->Replaying() ?
+                                CBlockLocator({state.checkpoint_sync->NextHash(), consensusParams.hashGenesisBlock}) : chainActive.GetLocator(start),
+                            state.checkpoint_sync->StopHash()));
                     }
                 }
                 if (!state.checkpoint_sync) {

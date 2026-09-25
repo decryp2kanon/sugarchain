@@ -13,6 +13,7 @@
 #include <vector>
 
 #include <map>
+#include <memory>
 
 class CBlockIndex;
 struct CCheckpointData;
@@ -28,8 +29,8 @@ namespace Checkpoints
  * sparse SHA256d commitments, never chainwork or block-index entries. Reaching
  * the hard-coded endpoint authenticates those commitments. The second pass
  * releases a chunk only after its complete hash chain matches a commitment.
- * This object is peer-local, bounded by the compiled-in checkpoint height, and
- * must not survive a failed/disconnected session.
+ * Mutable download state is peer-local. An authenticated snapshot may survive
+ * the peer to resume replay at an indexed, authenticated chunk boundary.
  */
 class HeaderSync {
 public:
@@ -37,6 +38,9 @@ public:
     HeaderSync(int start_height, const uint256& start_hash, const CCheckpointData& checkpoints);
     bool Process(const std::vector<CBlockHeader>& headers, std::vector<CBlockHeader>& authenticated);
     bool Authenticates(const uint256& hash, const CCheckpointData& checkpoints) const;
+    /** Clone authenticated commitments, discarding all packet-local state.
+     * Requires cs_main; resumes only at an accepted commitment boundary. */
+    std::shared_ptr<HeaderSync> Resume(const CCheckpointData& checkpoints) const;
     uint256 NextHash() const { return m_prev; }
     uint256 StopHash() const { return m_checkpoints.rbegin()->second; }
     bool Complete() const { return m_complete; }

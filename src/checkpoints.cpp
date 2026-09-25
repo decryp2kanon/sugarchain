@@ -10,6 +10,7 @@
 #include <validation.h>
 
 #include <stdint.h>
+#include <algorithm>
 #include <stdexcept>
 
 
@@ -86,6 +87,30 @@ namespace Checkpoints {
     {
         return !m_failed && m_replaying && m_checkpoints == checkpoints.mapCheckpoints &&
                m_authenticated.count(hash) != 0;
+    }
+
+    std::shared_ptr<HeaderSync> HeaderSync::Resume(const CCheckpointData& checkpoints) const
+    {
+        AssertLockHeld(cs_main);
+        if (!m_replaying || m_failed || m_checkpoints != checkpoints.mapCheckpoints) return nullptr;
+        auto resumed = std::make_shared<HeaderSync>(m_start_height, m_start_hash, checkpoints);
+        resumed->m_replaying = true;
+        resumed->m_commitments = m_commitments;
+        // Hash equality with an authenticated commitment is essential: neither
+        // best-header work nor a peer's last received height is proof of ancestry.
+        for (size_t i = m_commitments.size(); i > 0; --i) {
+            const auto it = mapBlockIndex.find(m_commitments[i - 1]);
+            const int height = std::min<size_t>(m_start_height + i * CHUNK_SIZE, m_checkpoints.rbegin()->first);
+            if (it == mapBlockIndex.end() || it->second->nHeight != height ||
+                !it->second->IsValid(BLOCK_VALID_TREE) ||
+                !(it->second->nStatus & BLOCK_CHECKPOINT_CHECKED)) continue;
+            if (height == m_checkpoints.rbegin()->first) return nullptr;
+            resumed->m_height = height;
+            resumed->m_prev = m_commitments[i - 1];
+            resumed->m_replay_chunk = i;
+            break;
+        }
+        return resumed;
     }
 
     bool CheckBlock(int nHeight, const uint256& hash, const CCheckpointData& data)

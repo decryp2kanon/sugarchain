@@ -90,15 +90,33 @@ Unsolicited historical HEADERS and INV-driven header requests from other peers
 are deferred while the checkpoint session is needed; they cannot defeat the
 quarantine by starting redundant bulk historical PoW verification.
 
-Quarantine state has a 60-second progress timeout and a four-hour absolute
-session deadline; neither timeout is a consensus rule. These apply even to a
-whitelisted or sole peer. Finalizing a peer releases the sync slot. INV-triggered
+Presync has a 60-second progress timeout and a four-hour absolute session
+deadline. Authenticated replay retains the progress timeout, but is not capped
+by the presync deadline. Neither timeout is a consensus rule; both phases enforce
+their timeouts even for a whitelisted or sole peer. Finalizing a peer releases
+the sync slot. INV-triggered
 requests and ordinary chainwork-based peer eviction cannot issue competing
 locators during presync. An unavailable or repeatedly malicious peer can still
 waste bandwidth/time; there is no bounded completion guarantee under eclipse.
 
+After endpoint authentication, one immutable commitment snapshot survives peer
+loss or rejection. A replacement peer resumes replay at the highest exact
+commitment hash already indexed at its expected height, valid at TREE level and
+marked checkpoint-authenticated. It must still match every remaining commitment
+and pass contextual header validation. An unaccepted or partial chunk is fetched
+again; a failed peer cannot alter the snapshot. Checkpoint configuration must
+match before reuse. Completion clears the snapshot. It is memory-only: a process
+restart still starts presync at the last indexed compiled-in checkpoint.
+
+The September 25 replay interruption was the original four-hour cap, not an
+invalid header at 17.59M: the session started at September 24 23:19:40 and logged
+the checkpoint timeout at 03:19:41, immediately after accepting height 17,590,000.
+The replacement started at indexed checkpoint 6,513,497, giving 2,000-header
+responses and 100,000-height progress logs their observed +1497 remainder.
+
 At 37.5 million headers, endpoints contain 600,000 bytes of hashes (vector
-capacity can be about 1 MiB), plus a bounded chunk and a bounded set of released
+capacity can be about 1 MiB), with one additional immutable snapshot of those
+hashes, plus a bounded chunk and a bounded set of released
 hashes. Packet boundary overlap can release two chunks in one call; it cannot
 make storage proportional to the number of forks. Header traffic increases by
 roughly 37.5M * 81 bytes = 3.04 GB for a genesis-start first pass, plus framing.
