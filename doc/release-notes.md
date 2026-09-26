@@ -25,7 +25,6 @@
 
 **Known Issues**
 - Fast IBD relies on compiled checkpoints and trusted local validation state. Selecting `-fast-ibd=0` can require substantial historical PoW verification during startup; the reported Fast IBD timing does not apply to this mode.
-- The documented review run reports a Qt PaymentServerTests failure caused by an expired certificate in an unchanged test fixture. Certificate validation has not been relaxed.
 
 **Credits:**
 Thanks to everyone who directly contributed to this release
