@@ -1,3 +1,38 @@
+## Yumekawa v0.16.4.1-visioneye
+- Version: Final Release
+- Date: 2026-09-26
+
+**Changes:**
+- Major Fix:
+  * Improve initial block download (IBD) performance. The reported final full IBD run completed in approximately 11 hours 31 minutes, reducing synchronization time from approximately one week to about 11.5 hours under the measured conditions. Actual times depend on hardware, storage, network conditions and peers.
+    [#222](https://github.com/sugarchain-project/sugarchain/pull/222),
+    [#225](https://github.com/sugarchain-project/sugarchain/pull/225)
+  * Add checkpoint-authenticated historical header synchronization, including a mainnet checkpoint at height 44,450,000. Headers are authenticated against compiled checkpoints before indexing, then replayed with authenticated chunk boundaries. This substitutes checkpoint trust for historical Yespower recomputation; contextual header checks, block integrity and transaction/UTXO validation remain in place, subject to the existing assume-valid script policy.
+    [#225](https://github.com/sugarchain-project/sugarchain/pull/225)
+  * Parallelize Yespower computation for headers requiring PoW verification and reuse results tied to the exact header. Persist actual PoW verification and checkpoint authentication as separate evidence, and validate legacy index entries that lack this evidence during startup.
+    [#225](https://github.com/sugarchain-project/sugarchain/pull/225)
+  * Enable Fast IBD by default. Use `-fast-ibd=0` to disable checkpoint substitution and the additional header PoW workers, and verify historical PoW, including entries previously authenticated only by checkpoint. Previously verified actual PoW results can still be reused. This option does not disable the separate `-assumevalid` script-validation policy.
+    [#225](https://github.com/sugarchain-project/sugarchain/pull/225)
+  * Improve the block download pipeline with adaptive requests based on peer delivery rates and batched P2P message processing. Increase the block-index database cache allowance and avoid redundant block-index writes during startup rewind processing.
+    [#222](https://github.com/sugarchain-project/sugarchain/pull/222),
+    [#225](https://github.com/sugarchain-project/sugarchain/pull/225)
+- Minor Fix:
+  * Display checkpoint header presync and replay progress in the Qt GUI. Reduce per-block tip logging during IBD and add synchronization diagnostics.
+  * Add Yespower throughput benchmarks, historical IBD sampling and a local IBD processing-time estimator. These estimates exclude network effects and do not replace a measured full synchronization run.
+  * Add regression coverage for checkpoint authentication, invalid PoW rejection, proof-cache reuse, persisted validation evidence, Qt progress and the IBD estimator.
+  * Document Fast IBD security assumptions and benchmark usage, refresh the README and release manpages, and fix missing explicit Boost bind includes.
+    [#225](https://github.com/sugarchain-project/sugarchain/pull/225)
+
+**Known Issues**
+- Fast IBD relies on compiled checkpoints and trusted local validation state. Selecting `-fast-ibd=0` can require substantial historical PoW verification during startup; the reported Fast IBD timing does not apply to this mode.
+
+**Credits:**
+Thanks to everyone who directly contributed to this release
+- decryp2kanon
+- cryptozeny
+
+-----
+
 ## Yumekawa v0.16.3.36-payapoya
 - Version: Final Release
 - Date: 2021-01-25
@@ -73,11 +108,11 @@ s8LUt0ccBgBXRkkLYCRfJdCdBYQm404QO5f36JMDWnaiY3gRDYgpK0RMpMagm7M6
     [#122](https://github.com/sugarchain-project/sugarchain/pull/122)
   * Add: new option `-prunedebuglogfile`: limit filesize of debug.log
     [#110](https://github.com/sugarchain-project/sugarchain/pull/110)
-  * Add: when IBD, print blockheader count on debug.log (only sugarchain-qt)
+  * Add: when IBD, print the block header count in debug.log (only sugarchain-qt)
     [#128](https://github.com/sugarchain-project/sugarchain/pull/128)
   * Update: checkpoints (mainnet)
     [#132](https://github.com/sugarchain-project/sugarchain/pull/132)
-  * Fix: IBD optimizing
+  * Fix: IBD optimization
     [#135](https://github.com/sugarchain-project/sugarchain/pull/135)
     [#22 (comment)](https://github.com/sugarchain-project/sugarchain/pull/22#issuecomment-568301895)
   * Update: seed list
@@ -85,32 +120,32 @@ s8LUt0ccBgBXRkkLYCRfJdCdBYQm404QO5f36JMDWnaiY3gRDYgpK0RMpMagm7M6
   * Remove: BCLog::POW (-debug=pow)
     [#142](https://github.com/sugarchain-project/sugarchain/pull/142)
 - Minor Fix:
-  * GUI: display size in `MB` (was GB)
+  * GUI: display sizes in `MB` (was GB)
     [#125](https://github.com/sugarchain-project/sugarchain/pull/125)
   * Revert: IBD settings back to BTC original
     [#124](https://github.com/sugarchain-project/sugarchain/pull/124)
   * Add: bootstrap height at `4421701`
     [#143](https://github.com/sugarchain-project/sugarchain/pull/143)
-  * Fix: travis pathlib2
+  * Fix: Travis pathlib2
     [#148](https://github.com/sugarchain-project/sugarchain/pull/148)
 
 **Known Issues**
 - Transaction too large:
-  * This is a part of BTC.
-  * It will be fixed in next *Taproot+Schnorr* update.
-- Slow update balance on wallet:
-  * This slow is a part of BTC.
-  * Update total balance *every minute (12 blocks)* interval.
+  * This is part of BTC.
+  * It will be fixed in the next *Taproot+Schnorr* update.
+- Slow balance updates in the wallet:
+  * This slowness is part of BTC.
+  * Update the total balance at *one-minute (12-block)* intervals.
   * This fix is a (nice) workaround for now. [source](https://github.com/sugarchain-project/sugarchain/commit/72436c90b29844cf507895df053103f9b6840776#diff-2e3836af182cfb375329c3463ffd91f8)
 - Poor performance on ARM CPUs (32/64-Bit):
   * No ARM optimization for Yespower yet.
 - Poor performance on 32-Bit OS:
   * No SSE2 optimization for Yespower yet. [source](https://github.com/sugarchain-project/sugarchain/blob/d977987a83aba115d50a9130f0d7914330d1bc75/src/crypto/yespower-1.0.1/yespower-opt.c#L59)
-- Slow startup on low memory machines:
-  * Startup can take up to some hours on 1cpu 1024ram (+swap 3GB) VPS.
-  * Workaround is just increase RAM at least 2 GB.
+- Slow startup on low-memory machines:
+  * Startup can take up to several hours on a 1-CPU, 1024 MB RAM (+3 GB swap) VPS.
+  * The workaround is to increase RAM by at least 2 GB.
 - Slow rescanning `wallet.dat`:
-  * If your wallet is too heavy or mining purpose, it may take very long when importing.
+  * If your wallet is too large or is used for mining, importing it may take a very long time.
 
 **Credits:**
 Thanks to everyone who directly contributed to this release
@@ -267,32 +302,32 @@ vmysL9NojJ1rXA9E/mGc
 
 **Changes:**
 - Major Fix:
-  * fix: Timeout downloading block
+  * fix: Timeout when downloading a block
   * revert: download window back to `1024` (was 1024*120=122880)
   * add: checkpointData, chainTxData
   * add: seed list from dnsseed
-  * fix: boost warnings on OSX by @volbil
-  * fix: gitian github URL to official repo
+  * fix: Boost warnings on OSX by @volbil
+  * fix: Gitian GitHub URL to the official repository
 - Minor Fix:
   * review: README.md by @Nugetzrul3
   * rename: Sugarchain Yumekawa developers
-  * create: benchmark sh and result
-  * add: translation: Korean, Japanese, Chinese(zh_CH)
-  * add: bootstrap linearize at height `650000`, `1043000`
+  * create: benchmark script and results
+  * add: translations: Korean, Japanese, and Chinese (zh_CH)
+  * add: bootstrap linearization at heights `650000` and `1043000`
   * fix: comment error (#6)
 
 **Known Issues**
 - Transaction too large:
-  * This is a part of BTC.
-  * It will be fixed in next *Schnorr Signature* update.
+  * This is part of BTC.
+  * It will be fixed in the next *Schnorr Signature* update.
 - Slow update balance on wallet:
-  * Update total balance *every minute (12 blocks)* interval.
-  * This slow is a part of BTC.
+  * Update the total balance at *one-minute (12-block)* intervals.
+  * This slowness is part of BTC.
   * This fix is a (nice) workaround for now. [source](https://github.com/sugarchain-project/sugarchain/commit/72436c90b29844cf507895df053103f9b6840776#diff-2e3836af182cfb375329c3463ffd91f8)
 - Poor performance on ARM CPUs (32/64-Bit):
-  * ARM optimization for Yespower disabled for now.
+  * ARM optimization for Yespower is disabled for now.
 - Poor performance on 32-Bit OS:
-  * SSE2 for Yespower disabled for now. [source](https://github.com/sugarchain-project/sugarchain/blob/d977987a83aba115d50a9130f0d7914330d1bc75/src/crypto/yespower-1.0.1/yespower-opt.c#L59)
+  * SSE2 for Yespower is disabled for now. [source](https://github.com/sugarchain-project/sugarchain/blob/d977987a83aba115d50a9130f0d7914330d1bc75/src/crypto/yespower-1.0.1/yespower-opt.c#L59)
   * Please use *64-bit* for best performance.
 
 **Credits:**
@@ -351,14 +386,14 @@ xYL5ZZjz9+fm+LEUdw07IBaKpdfYSVLjlMBi4pLXoo2b5On3Pt70B02QIpH5QpCc
 - Version: The First Release
 - Date: 2019-08-24
 
-Mainnet Launching: `2019/08/24 15:00 UTC`
+Mainnet Launch: `2019/08/24 15:00 UTC`
 https://bitcointalk.org/index.php?topic=5177722.0
 
 **Changes:**
 - Block time: `5` seconds
 - Difficulty: [SugarShield-N510](https://github.com/sugarchain-project/sugarchain/blob/master-v0.16.3/src/pow.cpp)
 - Block reward: 42.94967296 COIN `pow(2,32)/1E+08`
-- Halving interval: 12500000 Blocks `pow(5,8)*32` [source](https://github.com/sugarchain-project/sugarchain/blob/32c7d945cda04374f1abbcb8e9787704e7171d4e/src/validation.cpp#L1168-L1211)
+- Halving interval: 12500000 blocks `pow(5,8)*32` [source](https://github.com/sugarchain-project/sugarchain/blob/32c7d945cda04374f1abbcb8e9787704e7171d4e/src/validation.cpp#L1168-L1211)
 - Total supply: 1073741824 COIN `pow(2,30)` [source](https://github.com/sugarchain-project/yumekawa-utils)
 - PoW algorithm: YespowerSugar
   * Settings
@@ -384,7 +419,7 @@ https://bitcointalk.org/index.php?topic=5177722.0
   * Meaning: 34230 is the molar mass of a sugar [link](https://twitter.com/cryptozeny/status/1130167161475911682)
 - DEFAULT_MAX_TIME_ADJUSTMENT `70` (was 4200)
 - MAX_FUTURE_BLOCK_TIME `60` (was 7200)
-- QT delayed refresh balance [source](https://github.com/sugarchain-project/sugarchain/commit/72436c90b29844cf507895df053103f9b6840776#diff-2e3836af182cfb375329c3463ffd91f8)
+- QT delayed balance refresh [source](https://github.com/sugarchain-project/sugarchain/commit/72436c90b29844cf507895df053103f9b6840776#diff-2e3836af182cfb375329c3463ffd91f8)
 
 **Credits:**
 Thanks to everyone who directly contributed to this release (alphabetical order)
