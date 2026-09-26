@@ -1,3 +1,39 @@
+## Yumekawa v0.16.4.1-visioneye
+- Version: Final Release
+- Date: 2026-09-26
+
+**Changes:**
+- Major Fix:
+  * Improve initial block download (IBD) performance. The reported final full IBD run completed in approximately 11 hours 31 minutes, reducing synchronization time from approximately one week to about 11.5 hours under the measured conditions. Actual times depend on hardware, storage, network conditions and peers.
+    [#222](https://github.com/sugarchain-project/sugarchain/pull/222),
+    [#225](https://github.com/sugarchain-project/sugarchain/pull/225)
+  * Add checkpoint-authenticated historical header synchronization, including a mainnet checkpoint at height 44,450,000. Headers are authenticated against compiled checkpoints before indexing, then replayed with authenticated chunk boundaries. This substitutes checkpoint trust for historical Yespower recomputation; contextual header checks, block integrity and transaction/UTXO validation remain in place, subject to the existing assume-valid script policy.
+    [#225](https://github.com/sugarchain-project/sugarchain/pull/225)
+  * Parallelize Yespower computation for headers requiring PoW verification and reuse results tied to the exact header. Persist actual PoW verification and checkpoint authentication as separate evidence, and validate legacy index entries that lack this evidence during startup.
+    [#225](https://github.com/sugarchain-project/sugarchain/pull/225)
+  * Enable Fast IBD by default. Use `-fast-ibd=0` to disable checkpoint substitution and the additional header PoW workers, and verify historical PoW, including entries previously authenticated only by checkpoint. Previously verified actual PoW results can still be reused. This option does not disable the separate `-assumevalid` script-validation policy.
+    [#225](https://github.com/sugarchain-project/sugarchain/pull/225)
+  * Improve the block download pipeline with adaptive requests based on peer delivery rates and batched P2P message processing. Increase the block-index database cache allowance and avoid redundant block-index writes during startup rewind processing.
+    [#222](https://github.com/sugarchain-project/sugarchain/pull/222),
+    [#225](https://github.com/sugarchain-project/sugarchain/pull/225)
+- Minor Fix:
+  * Display checkpoint header presync and replay progress in the Qt GUI. Reduce per-block tip logging during IBD and add synchronization diagnostics.
+  * Add Yespower throughput benchmarks, historical IBD sampling and a local IBD processing-time estimator. These estimates exclude network effects and do not replace a measured full synchronization run.
+  * Add regression coverage for checkpoint authentication, invalid PoW rejection, proof-cache reuse, persisted validation evidence, Qt progress and the IBD estimator.
+  * Document Fast IBD security assumptions and benchmark usage, refresh the README and release manpages, and fix missing explicit Boost bind includes.
+    [#225](https://github.com/sugarchain-project/sugarchain/pull/225)
+
+**Known Issues**
+- Fast IBD relies on compiled checkpoints and trusted local validation state. Selecting `-fast-ibd=0` can require substantial historical PoW verification during startup; the reported Fast IBD timing does not apply to this mode.
+- The documented review run reports a Qt PaymentServerTests failure caused by an expired certificate in an unchanged test fixture. Certificate validation has not been relaxed.
+
+**Credits:**
+Thanks to everyone who directly contributed to this release
+- decryp2kanon
+- cryptozeny
+
+-----
+
 ## Yumekawa v0.16.3.36-payapoya
 - Version: Final Release
 - Date: 2021-01-25
