@@ -4,7 +4,7 @@ _This document describes usage of the multiprocess feature. For design informati
 
 ## Build Option
 
-The `-DENABLE_IPC=ON` build option, supported and enabled by default on Unix systems, can be passed to build the supplemental `bitcoin-node` and `bitcoin-gui` multiprocess executables.
+The `-DENABLE_IPC=ON` build option, supported and enabled by default on Unix systems, can be passed to build the supplemental `sugarchain-node` and `sugarchain-gui` multiprocess executables.
 
 ## Debugging
 
@@ -25,8 +25,8 @@ make -C depends NO_QT=1
 HOST_PLATFORM="x86_64-pc-linux-gnu"
 cmake -B build --toolchain=depends/$HOST_PLATFORM/toolchain.cmake
 cmake --build build
-build/bin/bitcoin -m node -regtest -printtoconsole -debug=ipc
-BITCOIN_CMD="bitcoin -m" build/test/functional/test_runner.py
+build/bin/sugarchain -m node -regtest -printtoconsole -debug=ipc
+BITCOIN_CMD="sugarchain -m" build/test/functional/test_runner.py
 ```
 
 The `cmake` build will pick up settings and library locations from the depends directory, so there is no need to pass `-DENABLE_IPC=ON` as a separate flag when using the depends system (it's controlled by the `NO_IPC=1` option).
@@ -41,9 +41,9 @@ By default when `-DENABLE_IPC=ON` is enabled, the libmultiprocess sources at [..
 
 ## Usage
 
-Recommended way to use multiprocess binaries is to invoke `bitcoin` CLI like `bitcoin -m node -debug=ipc` or `bitcoin -m gui -printtoconsole -debug=ipc`.
+Recommended way to use multiprocess binaries is to invoke `sugarchain` CLI like `sugarchain -m node -debug=ipc` or `sugarchain -m gui -printtoconsole -debug=ipc`.
 
-When the `-m` (`--multiprocess`) option is used the `bitcoin` command will execute multiprocess binaries instead of monolithic ones (`bitcoin-node` instead of `bitcoind`, and `bitcoin-gui` instead of `bitcoin-qt`). The multiprocess binaries can also be invoked directly, but this is not recommended as they may change or be renamed in the future, and they are not installed in the PATH.
+When the `-m` (`--multiprocess`) option is used the `sugarchain` command will execute multiprocess binaries instead of monolithic ones (`sugarchain-node` instead of `sugarchaind`, and `sugarchain-gui` instead of `sugarchain-qt`). The multiprocess binaries can also be invoked directly, but this is not recommended as they may change or be renamed in the future, and they are not installed in the PATH.
 
 The multiprocess binaries currently function the same as the monolithic binaries, except they support an `-ipcbind` option.
 

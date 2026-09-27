@@ -1,33 +1,33 @@
-Bitcoin Core
+Sugarchain Komorebi
 =============
 
 Setup
 ---------------------
-Bitcoin Core is the original Bitcoin client and it builds the backbone of the network. It downloads and, by default, stores the entire history of Bitcoin transactions, which requires several hundred gigabytes or more of disk space. Depending on the speed of your computer and network connection, the synchronization process can take anywhere from a few hours to several days or more.
+Sugarchain Komorebi is the original Bitcoin client and it builds the backbone of the network. It downloads and, by default, stores the entire history of Bitcoin transactions, which requires several hundred gigabytes or more of disk space. Depending on the speed of your computer and network connection, the synchronization process can take anywhere from a few hours to several days or more.
 
-To download Bitcoin Core, visit [bitcoincore.org](https://bitcoincore.org/en/download/).
+To download Sugarchain Komorebi, visit [bitcoincore.org](https://bitcoincore.org/en/download/).
 
 Running
 ---------------------
-The following are some helpful notes on how to run Bitcoin Core on your native platform.
+The following are some helpful notes on how to run Sugarchain Komorebi on your native platform.
 
 ### Unix
 
 Unpack the files into a directory and run:
 
-- `bin/bitcoin-qt` (GUI) or
-- `bin/bitcoind` (headless)
-- `bin/bitcoin` (wrapper command)
+- `bin/sugarchain-qt` (GUI) or
+- `bin/sugarchaind` (headless)
+- `bin/sugarchain` (wrapper command)
 
 The `bitcoin` command supports subcommands like `bitcoin gui`, `bitcoin node`, and `bitcoin rpc` exposing different functionality. Subcommands can be listed with `bitcoin help`.
 
 ### Windows
 
-Unpack the files into a directory, and then run bitcoin-qt.exe.
+Unpack the files into a directory, and then run sugarchain-qt.exe.
 
 ### macOS
 
-Drag Bitcoin Core to your applications folder, and then run Bitcoin Core.
+Drag Sugarchain Komorebi to your applications folder, and then run Sugarchain Komorebi.
 
 ### Need Help?
 
@@ -39,7 +39,7 @@ for help and more information.
 
 Building
 ---------------------
-The following are developer notes on how to build Bitcoin Core on your native platform. They are not complete guides, but include notes on the necessary libraries, compile flags, etc.
+The following are developer notes on how to build Sugarchain Komorebi on your native platform. They are not complete guides, but include notes on the necessary libraries, compile flags, etc.
 
 - [Dependencies](dependencies.md)
 - [macOS Build Notes](build-osx.md)

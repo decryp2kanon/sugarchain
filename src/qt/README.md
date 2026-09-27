@@ -1,4 +1,4 @@
-This directory contains the source code for the Bitcoin Core graphical user interface (GUI). It uses the [Qt](https://www1.qt.io/developers/) cross-platform framework.
+This directory contains the source code for the Sugarchain Komorebi graphical user interface (GUI). It uses the [Qt](https://www1.qt.io/developers/) cross-platform framework.
 
 The current precise version for Qt is specified in [qt_details.mk](/depends/packages/qt_details.mk).
 
@@ -11,7 +11,7 @@ When following your systems build instructions, make sure to install the `Qt` de
 To run:
 
 ```sh
-./build/bin/bitcoin-qt
+./build/bin/sugarchain-qt
 ```
 
 ## Files and Directories
@@ -101,7 +101,7 @@ sudo apt-get install qtcreator
 1. Make sure you've installed all dependencies specified in your systems build instructions
 2. Follow the compile instructions for your system, adding the `-DCMAKE_BUILD_TYPE=Debug` build flag
 3. Start Qt Creator. At the start page, do: `New` -> `Import Project` -> `Import Existing Project`
-4. Enter `bitcoin-qt` as the Project Name and enter the absolute path to `src/qt` as Location
+4. Enter `sugarchain-qt` as the Project Name and enter the absolute path to `src/qt` as Location
 5. Check over the file selection, you may need to select the `forms` directory (necessary if you intend to edit *.ui files)
 6. Confirm the `Summary` page
 7. In the `Projects` tab, select `Manage Kits...`
@@ -119,6 +119,6 @@ sudo apt-get install qtcreator
  - Under `Compilers`: select `"GCC (x86 64bit in /usr/bin)"`
  - Under `Debuggers`: select `"GDB"` as debugger
 
-8. While in the `Projects` tab, ensure that you have the `bitcoin-qt` executable specified under `Run`
- - If the executable is not specified: click `"Choose..."`, navigate to `build/bin`, and select `bitcoin-qt`
-9. You're all set! Start developing, building, and debugging the Bitcoin Core GUI
+8. While in the `Projects` tab, ensure that you have the `sugarchain-qt` executable specified under `Run`
+ - If the executable is not specified: click `"Choose..."`, navigate to `build/bin`, and select `sugarchain-qt`
+9. You're all set! Start developing, building, and debugging the Sugarchain Komorebi GUI

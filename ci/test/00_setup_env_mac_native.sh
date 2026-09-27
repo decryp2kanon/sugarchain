@@ -19,4 +19,4 @@ export BITCOIN_CONFIG="\
   -DREDUCE_EXPORTS=ON \
   -DCMAKE_EXE_LINKER_FLAGS='-Wl,-stack_size -Wl,0x80000' \
 "
-export BITCOIN_CMD="bitcoin -m" # Used in functional tests
+export BITCOIN_CMD="sugarchain -m" # Used in functional tests

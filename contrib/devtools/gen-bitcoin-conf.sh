@@ -7,7 +7,7 @@ export LC_ALL=C
 TOPDIR=${TOPDIR:-$(git rev-parse --show-toplevel)}
 BUILDDIR=${BUILDDIR:-$TOPDIR/build}
 BINDIR=${BINDIR:-$BUILDDIR/bin}
-BITCOIND=${BITCOIND:-$BINDIR/bitcoind}
+BITCOIND=${BITCOIND:-$BINDIR/sugarchaind}
 SHARE_EXAMPLES_DIR=${SHARE_EXAMPLES_DIR:-$TOPDIR/share/examples}
 EXAMPLE_CONF_FILE=${EXAMPLE_CONF_FILE:-$SHARE_EXAMPLES_DIR/bitcoin.conf}
 
@@ -46,7 +46,7 @@ cat > "${EXAMPLE_CONF_FILE}" << 'EOF'
 ### Options
 EOF
 
-# parse the output from bitcoind --help
+# parse the output from sugarchaind --help
 # adding newlines is a bit funky to ensure portability for BSD
 # see here for more details: https://stackoverflow.com/a/24575385
 ${BITCOIND} --help \

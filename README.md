@@ -1,25 +1,41 @@
-Bitcoin Core integration/staging tree
-=====================================
+# Sugarchain Komorebi — Core31 branding baseline
 
-https://bitcoincore.org
+This branch rebrands the application and executable names from Bitcoin Core
+v31.1. It does **not** implement the Sugarchain network: network parameters,
+consensus, units, wire identities, and existing data/configuration paths remain
+at the Bitcoin baseline. Use an isolated regtest data directory when evaluating
+this port. Do not use an existing Sugarchain wallet or data directory.
 
-For an immediately usable, binary version of the Bitcoin Core software, see
-https://bitcoincore.org/en/download/.
+User executables use the `sugarchain` prefix, including the `sugarchain` launcher,
+`sugarchaind`, `sugarchain-cli`, `sugarchain-qt`, `sugarchain-tx`,
+`sugarchain-wallet`, `sugarchain-util`, and IPC `sugarchain-node`/`sugarchain-gui`.
+Internal CMake target names and test/benchmark executable names remain unchanged.
+Upstream links below are retained as upstream references, not new support endpoints.
 
-What is Bitcoin Core?
----------------------
+Build and run
+-------------
 
-Bitcoin Core connects to the Bitcoin peer-to-peer network to download and fully
-validate blocks and transactions. It also includes a wallet and graphical user
-interface, which can be optionally built.
+```sh
+cmake -S . -B build -DBUILD_GUI=ON -DCMAKE_PREFIX_PATH=/usr/local
+cmake --build build -j$(nproc)
+ctest --test-dir build --output-on-failure
+build/bin/sugarchain --help
+```
 
-Further information about Bitcoin Core is available in the [doc folder](/doc).
+See `doc/build-*.md` for platform dependencies and `doc/multiprocess.md` for IPC.
+The source repository is https://github.com/decryp2kanon/sugarchain.
+No Komorebi binary release or replacement support/security endpoint is announced here.
 
 License
 -------
 
-Bitcoin Core is released under the terms of the MIT license. See [COPYING](COPYING) for more
-information or see https://opensource.org/license/MIT.
+Released under the MIT license; see [COPYING](COPYING). The original Bitcoin Core
+copyright and upstream attribution are retained.
+
+Upstream Bitcoin Core development reference
+------------------------------------------
+
+The following workflow and service links describe upstream Bitcoin Core.
 
 Development Process
 -------------------

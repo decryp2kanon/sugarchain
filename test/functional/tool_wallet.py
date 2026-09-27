@@ -2,7 +2,7 @@
 # Copyright (c) 2018-present The Bitcoin Core developers
 # Distributed under the MIT software license, see the accompanying
 # file COPYING or http://www.opensource.org/licenses/mit-license.php.
-"""Test bitcoin-wallet."""
+"""Test sugarchain-wallet."""
 
 import os
 import stat
@@ -130,11 +130,11 @@ class ToolWalletTest(BitcoinTestFramework):
     def test_invalid_tool_commands_and_args(self):
         self.log.info('Testing that various invalid commands raise with specific error messages')
         self.assert_raises_tool_error("Error parsing command line arguments: Invalid command 'foo'", 'foo')
-        # `bitcoin-wallet help` raises an error. Use `bitcoin-wallet -help`.
+        # `sugarchain-wallet help` raises an error. Use `sugarchain-wallet -help`.
         self.assert_raises_tool_error("Error parsing command line arguments: Invalid command 'help'", 'help')
         self.assert_raises_tool_error('Error: Additional arguments provided (create). Methods do not take arguments. Please refer to `-help`.', 'info', 'create')
         self.assert_raises_tool_error('Error parsing command line arguments: Invalid parameter -foo', '-foo')
-        self.assert_raises_tool_error('No method provided. Run `bitcoin-wallet -help` for valid methods.')
+        self.assert_raises_tool_error('No method provided. Run `sugarchain-wallet -help` for valid methods.')
         self.assert_raises_tool_error('Wallet name must be provided when creating a new wallet.', 'create')
         self.assert_raises_tool_error('Wallet name must be provided when creating a new wallet.', 'createfromdump')
         error = f"SQLiteDatabase: Unable to obtain an exclusive lock on the database, is it being used by another instance of {self.config['environment']['CLIENT_NAME']}?"
@@ -284,12 +284,12 @@ class ToolWalletTest(BitcoinTestFramework):
         bad_ver_wallet_dump = self.nodes[0].datadir_path / "wallet-bad_ver1.dump"
         dump_data["BITCOIN_CORE_WALLET_DUMP"] = "0"
         self.write_dump(dump_data, bad_ver_wallet_dump)
-        self.assert_raises_tool_error('Error: Dumpfile version is not supported. This version of bitcoin-wallet only supports version 1 dumpfiles. Got dumpfile with version 0', '-wallet=badload', '-dumpfile={}'.format(bad_ver_wallet_dump), 'createfromdump')
+        self.assert_raises_tool_error('Error: Dumpfile version is not supported. This version of sugarchain-wallet only supports version 1 dumpfiles. Got dumpfile with version 0', '-wallet=badload', '-dumpfile={}'.format(bad_ver_wallet_dump), 'createfromdump')
         assert not (self.nodes[0].wallets_path / "badload").is_dir()
         bad_ver_wallet_dump = self.nodes[0].datadir_path / "wallet-bad_ver2.dump"
         dump_data["BITCOIN_CORE_WALLET_DUMP"] = "2"
         self.write_dump(dump_data, bad_ver_wallet_dump)
-        self.assert_raises_tool_error('Error: Dumpfile version is not supported. This version of bitcoin-wallet only supports version 1 dumpfiles. Got dumpfile with version 2', '-wallet=badload', '-dumpfile={}'.format(bad_ver_wallet_dump), 'createfromdump')
+        self.assert_raises_tool_error('Error: Dumpfile version is not supported. This version of sugarchain-wallet only supports version 1 dumpfiles. Got dumpfile with version 2', '-wallet=badload', '-dumpfile={}'.format(bad_ver_wallet_dump), 'createfromdump')
         assert not (self.nodes[0].wallets_path / "badload").is_dir()
         bad_magic_wallet_dump = self.nodes[0].datadir_path / "wallet-bad_magic.dump"
         del dump_data["BITCOIN_CORE_WALLET_DUMP"]

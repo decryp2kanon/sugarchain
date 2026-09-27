@@ -76,12 +76,12 @@
     </message>
     <message>
         <location line="+6"/>
-        <source>These are your Bitcoin addresses for sending payments. Always check the amount and the receiving address before sending coins.</source>
+        <source>These are your Sugarchain addresses for sending payments. Always check the amount and the receiving address before sending coins.</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
         <location line="+5"/>
-        <source>These are your Bitcoin addresses for receiving payments. Use the &apos;Create new receiving address&apos; button in the receive tab to create new addresses.
+        <source>These are your Sugarchain addresses for receiving payments. Use the &apos;Create new receiving address&apos; button in the receive tab to create new addresses.
 Signing is only possible with addresses of the type &apos;legacy&apos;.</source>
         <translation type="unfinished"></translation>
     </message>
@@ -215,7 +215,12 @@ Signing is only possible with addresses of the type &apos;legacy&apos;.</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location line="+12"/>
+        <location line="-8"/>
+        <source>Remember that encrypting your wallet cannot fully protect your Sugarchain coins from being stolen by malware infecting your computer.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+20"/>
         <location line="+58"/>
         <source>Wallet encrypted</source>
         <translation type="unfinished"></translation>
@@ -241,12 +246,7 @@ Signing is only possible with addresses of the type &apos;legacy&apos;.</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location line="+7"/>
-        <source>Remember that encrypting your wallet cannot fully protect your bitcoins from being stolen by malware infecting your computer.</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location line="+5"/>
+        <location line="+12"/>
         <source>Wallet to be encrypted</source>
         <translation type="unfinished"></translation>
     </message>
@@ -428,7 +428,12 @@ Signing is only possible with addresses of the type &apos;legacy&apos;.</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location line="+218"/>
+        <location line="+18"/>
+        <source>Show the %1 help message to get a list with possible Sugarchain command-line options</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+200"/>
         <source>&amp;Minimize</source>
         <translation type="unfinished"></translation>
     </message>
@@ -437,8 +442,17 @@ Signing is only possible with addresses of the type &apos;legacy&apos;.</source>
         <source>Wallet:</source>
         <translation type="unfinished"></translation>
     </message>
+    <message numerus="yes">
+        <location line="+413"/>
+        <source>%n active connection(s) to Sugarchain network.</source>
+        <extracomment>A substring of the tooltip.</extracomment>
+        <translation type="unfinished">
+            <numerusform></numerusform>
+            <numerusform></numerusform>
+        </translation>
+    </message>
     <message>
-        <location line="+418"/>
+        <location line="+3"/>
         <source>Network activity disabled.</source>
         <extracomment>A substring of the tooltip.</extracomment>
         <translation type="unfinished"></translation>
@@ -449,12 +463,7 @@ Signing is only possible with addresses of the type &apos;legacy&apos;.</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location line="-1250"/>
-        <source>Send coins to a Bitcoin address</source>
-        <translation>Send coins to a Bitcoin address</translation>
-    </message>
-    <message>
-        <location line="+53"/>
+        <location line="-1195"/>
         <source>Backup wallet to another location</source>
         <translation>Backup wallet to another location</translation>
     </message>
@@ -504,22 +513,12 @@ Signing is only possible with addresses of the type &apos;legacy&apos;.</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location line="+1"/>
-        <source>Sign messages with your Bitcoin addresses to prove you own them</source>
-        <translation>Sign messages with your Bitcoin addresses to prove you own them</translation>
-    </message>
-    <message>
-        <location line="+1"/>
+        <location line="+2"/>
         <source>&amp;Verify message…</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location line="+1"/>
-        <source>Verify messages to ensure they were signed with specified Bitcoin addresses</source>
-        <translation>Verify messages to ensure they were signed with specified Bitcoin addresses</translation>
-    </message>
-    <message>
-        <location line="+1"/>
+        <location line="+2"/>
         <source>&amp;Load PSBT from file…</source>
         <translation type="unfinished"></translation>
     </message>
@@ -569,7 +568,7 @@ Signing is only possible with addresses of the type &apos;legacy&apos;.</source>
         <translation>Tabs toolbar</translation>
     </message>
     <message>
-        <location line="+482"/>
+        <location line="+480"/>
         <source>Syncing Headers (%1%)…</source>
         <translation type="unfinished"></translation>
     </message>
@@ -594,7 +593,7 @@ Signing is only possible with addresses of the type &apos;legacy&apos;.</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location line="-913"/>
+        <location line="-911"/>
         <source>Request payments (generates QR codes and bitcoin: URIs)</source>
         <translation type="unfinished"></translation>
     </message>
@@ -614,7 +613,7 @@ Signing is only possible with addresses of the type &apos;legacy&apos;.</source>
         <translation type="unfinished"></translation>
     </message>
     <message numerus="yes">
-        <location line="+824"/>
+        <location line="+822"/>
         <source>Processed %n block(s) of transaction history.</source>
         <translation>
             <numerusform>Processed %n block of transaction history.</numerusform>
@@ -662,12 +661,27 @@ Signing is only possible with addresses of the type &apos;legacy&apos;.</source>
         <translation>Up to date</translation>
     </message>
     <message>
-        <location line="-898"/>
+        <location line="-931"/>
+        <source>Send coins to a Sugarchain address</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+35"/>
         <source>Ctrl+Q</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location line="+26"/>
+        <location line="+22"/>
+        <source>Sign messages with your Sugarchain addresses to prove you own them</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>Verify messages to ensure they were signed with specified Sugarchain addresses</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+2"/>
         <source>Load Partially Signed Bitcoin Transaction</source>
         <translation type="unfinished"></translation>
     </message>
@@ -749,12 +763,7 @@ Signing is only possible with addresses of the type &apos;legacy&apos;.</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location line="+5"/>
-        <source>Show the %1 help message to get a list with possible Bitcoin command-line options</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location line="+2"/>
+        <location line="+7"/>
         <source>&amp;Mask values</source>
         <translation type="unfinished"></translation>
     </message>
@@ -837,7 +846,7 @@ Signing is only possible with addresses of the type &apos;legacy&apos;.</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location line="+279"/>
+        <location line="+277"/>
         <source>%1 client</source>
         <translation type="unfinished"></translation>
     </message>
@@ -851,17 +860,8 @@ Signing is only possible with addresses of the type &apos;legacy&apos;.</source>
         <source>S&amp;how</source>
         <translation type="unfinished"></translation>
     </message>
-    <message numerus="yes">
-        <location line="+118"/>
-        <source>%n active connection(s) to Bitcoin network.</source>
-        <extracomment>A substring of the tooltip.</extracomment>
-        <translation type="unfinished">
-            <numerusform>%n active connection to Bitcoin network.</numerusform>
-            <numerusform>%n active connections to Bitcoin network.</numerusform>
-        </translation>
-    </message>
     <message>
-        <location line="+10"/>
+        <location line="+128"/>
         <source>Click for more actions.</source>
         <extracomment>A substring of the tooltip. &quot;More actions&quot; are available via the context menu.</extracomment>
         <translation type="unfinished"></translation>
@@ -1307,12 +1307,7 @@ Signing is only possible with addresses of the type &apos;legacy&apos;.</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location line="+77"/>
-        <source>The entered address &quot;%1&quot; is not a valid Bitcoin address.</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location line="+33"/>
+        <location line="+110"/>
         <source>Address &quot;%1&quot; already exists as a receiving address with label &quot;%2&quot; and so cannot be added as a sending address.</source>
         <translation type="unfinished"></translation>
     </message>
@@ -1327,7 +1322,12 @@ Signing is only possible with addresses of the type &apos;legacy&apos;.</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location line="+5"/>
+        <location line="-10"/>
+        <source>The entered address &quot;%1&quot; is not a valid Sugarchain address.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+15"/>
         <source>New key generation failed.</source>
         <translation type="unfinished"></translation>
     </message>
@@ -1435,13 +1435,8 @@ Signing is only possible with addresses of the type &apos;legacy&apos;.</source>
         <source>Use a custom data directory:</source>
         <translation>Use a custom data directory:</translation>
     </message>
-    <message>
-        <location filename="../intro.cpp" line="+54"/>
-        <source>Bitcoin</source>
-        <translation type="unfinished">Bitcoin</translation>
-    </message>
     <message numerus="yes">
-        <location line="+164"/>
+        <location filename="../intro.cpp" line="+218"/>
         <source>%n GB of space available</source>
         <translation type="unfinished">
             <numerusform>%n GB of space available</numerusform>
@@ -1490,7 +1485,7 @@ Signing is only possible with addresses of the type &apos;legacy&apos;.</source>
     </message>
     <message>
         <location line="+2"/>
-        <source>%1 will download and store a copy of the Bitcoin block chain.</source>
+        <source>%1 will download and store a copy of the Sugarchain block chain.</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
@@ -1504,7 +1499,12 @@ Signing is only possible with addresses of the type &apos;legacy&apos;.</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location line="+30"/>
+        <location line="-113"/>
+        <source>Sugarchain</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+143"/>
         <source>Error</source>
         <translation>Error</translation>
     </message>
@@ -1622,17 +1622,7 @@ The migration process will create a backup of the wallet before migrating. This 
         <translation type="unfinished">Form</translation>
     </message>
     <message>
-        <location line="+119"/>
-        <source>Recent transactions may not yet be visible, and therefore your wallet&apos;s balance might be incorrect. This information will be correct once your wallet has finished synchronizing with the bitcoin network, as detailed below.</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location line="+19"/>
-        <source>Attempting to spend bitcoins that are affected by not-yet-displayed transactions will not be accepted by the network.</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location line="+63"/>
+        <location line="+201"/>
         <source>Number of blocks left</source>
         <translation type="unfinished"></translation>
     </message>
@@ -1655,7 +1645,17 @@ The migration process will create a backup of the wallet before migrating. This 
         <translation type="unfinished">Last block time</translation>
     </message>
     <message>
-        <location line="+26"/>
+        <location line="-102"/>
+        <source>Recent transactions may not yet be visible, and therefore your wallet&apos;s balance might be incorrect. This information will be correct once your wallet has finished synchronizing with the Sugarchain network, as detailed below.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+19"/>
+        <source>Attempting to spend Sugarchain coins that are affected by not-yet-displayed transactions will not be accepted by the network.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+109"/>
         <source>Progress</source>
         <translation type="unfinished"></translation>
     </message>
@@ -1788,17 +1788,17 @@ The migration process will create a backup of the wallet before migrating. This 
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location line="+32"/>
-        <source>Automatically open the Bitcoin client port on the router. This only works when your router supports PCP or NAT-PMP and it is enabled. The external port could be random.</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location line="+3"/>
+        <location line="+35"/>
         <source>Map port using PCP or NA&amp;T-PMP</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location line="+54"/>
+        <location line="+17"/>
+        <source>Connect to the Sugarchain network through a SOCKS5 proxy.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+37"/>
         <location line="+187"/>
         <source>IP address of the proxy (e.g. IPv4: 127.0.0.1 / IPv6: ::1)</source>
         <translation type="unfinished"></translation>
@@ -1953,7 +1953,12 @@ The migration process will create a backup of the wallet before migrating. This 
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location line="+52"/>
+        <location line="+42"/>
+        <source>Automatically open the Sugarchain client port on the router. This only works when your router supports PCP or NAT-PMP and it is enabled. The external port could be random.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+10"/>
         <source>Accept connections from outside.</source>
         <translation type="unfinished"></translation>
     </message>
@@ -1963,12 +1968,7 @@ The migration process will create a backup of the wallet before migrating. This 
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location line="+7"/>
-        <source>Connect to the Bitcoin network through a SOCKS5 proxy.</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location line="+3"/>
+        <location line="+10"/>
         <source>&amp;Connect through SOCKS5 proxy (default proxy):</source>
         <translation type="unfinished"></translation>
     </message>
@@ -2011,7 +2011,12 @@ The migration process will create a backup of the wallet before migrating. This 
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location line="+130"/>
+        <location line="+25"/>
+        <source>Connect to the Sugarchain network through a separate SOCKS5 proxy for Tor onion services.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+105"/>
         <source>&amp;Window</source>
         <translation>&amp;Window</translation>
     </message>
@@ -2082,12 +2087,7 @@ The migration process will create a backup of the wallet before migrating. This 
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location line="+290"/>
-        <source>Connect to the Bitcoin network through a separate SOCKS5 proxy for Tor onion services.</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location line="+3"/>
+        <location line="+293"/>
         <source>Use separate SOCKS&amp;5 proxy to reach peers via Tor onion services:</source>
         <translation type="unfinished"></translation>
     </message>
@@ -2201,13 +2201,7 @@ The migration process will create a backup of the wallet before migrating. This 
         <translation>Form</translation>
     </message>
     <message>
-        <location line="+62"/>
-        <location line="+220"/>
-        <source>The displayed information may be out of date. Your wallet automatically synchronizes with the Bitcoin network after a connection is established, but this process has not completed yet.</source>
-        <translation>The displayed information may be out of date. Your wallet automatically synchronizes with the Bitcoin network after a connection is established, but this process has not completed yet.</translation>
-    </message>
-    <message>
-        <location line="-88"/>
+        <location line="+194"/>
         <source>Available:</source>
         <translation type="unfinished"></translation>
     </message>
@@ -2242,7 +2236,13 @@ The migration process will create a backup of the wallet before migrating. This 
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location line="+83"/>
+        <location line="+16"/>
+        <location line="+220"/>
+        <source>The displayed information may be out of date. Your wallet automatically synchronizes with the Sugarchain network after a connection is established, but this process has not completed yet.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="-153"/>
         <source>Total:</source>
         <translation>Total:</translation>
     </message>
@@ -2472,7 +2472,7 @@ If you are receiving this error you should request the merchant provide a BIP21 
     </message>
     <message>
         <location line="-10"/>
-        <source>URI cannot be parsed! This can be caused by an invalid Bitcoin address or malformed URI parameters.</source>
+        <source>URI cannot be parsed! This can be caused by an invalid Sugarchain address or malformed URI parameters.</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
@@ -2565,7 +2565,7 @@ If you are receiving this error you should request the merchant provide a BIP21 
     </message>
     <message>
         <location filename="../guiutil.cpp" line="+138"/>
-        <source>Enter a Bitcoin address (e.g. %1)</source>
+        <source>Enter a Sugarchain address (e.g. %1)</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
@@ -2796,7 +2796,7 @@ If you are receiving this error you should request the merchant provide a BIP21 
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location line="+418"/>
+        <location line="+419"/>
         <source>Error: %1</source>
         <translation type="unfinished"></translation>
     </message>
@@ -2972,12 +2972,7 @@ If you are receiving this error you should request the merchant provide a BIP21 
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location line="+28"/>
-        <source>Network addresses that your Bitcoin node is currently using to communicate with other nodes.</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location line="+13"/>
+        <location line="+41"/>
         <source>Block chain</source>
         <translation>Block chain</translation>
     </message>
@@ -3152,7 +3147,12 @@ If you are receiving this error you should request the merchant provide a BIP21 
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location line="+288"/>
+        <location line="+268"/>
+        <source>Network addresses that your Sugarchain node is currently using to communicate with other nodes.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+20"/>
         <source>Current block height</source>
         <translation type="unfinished"></translation>
     </message>
@@ -3580,12 +3580,7 @@ For more information on using this console, type %6.
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location line="-3"/>
-        <source>An optional message to attach to the payment request, which will be displayed when the request is opened. Note: The message will not be sent with the payment over the Bitcoin network.</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location line="+30"/>
+        <location line="+27"/>
         <source>An optional label to associate with the new receiving address.</source>
         <translation type="unfinished"></translation>
     </message>
@@ -3601,7 +3596,12 @@ For more information on using this console, type %6.
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location line="-127"/>
+        <location line="-143"/>
+        <source>An optional message to attach to the payment request, which will be displayed when the request is opened. Note: The message will not be sent with the payment over the Sugarchain network.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+16"/>
         <source>An optional label to associate with the new receiving address (used by you to identify an invoice).  It is also attached to the payment request.</source>
         <translation type="unfinished"></translation>
     </message>
@@ -4295,7 +4295,7 @@ Note:  Since the fee is calculated on a per-byte basis, a fee rate of &quot;100 
     </message>
     <message>
         <location line="+99"/>
-        <source>Warning: Invalid Bitcoin address</source>
+        <source>Warning: Invalid Sugarchain address</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
@@ -4332,7 +4332,12 @@ Note:  Since the fee is calculated on a per-byte basis, a fee rate of &quot;100 
         <translation>Pay &amp;To:</translation>
     </message>
     <message>
-        <location line="+93"/>
+        <location line="+18"/>
+        <source>The Sugarchain address to send the payment to</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+75"/>
         <source>&amp;Label:</source>
         <translation>&amp;Label:</translation>
     </message>
@@ -4342,12 +4347,7 @@ Note:  Since the fee is calculated on a per-byte basis, a fee rate of &quot;100 
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location line="-7"/>
-        <source>The Bitcoin address to send the payment to</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location line="+23"/>
+        <location line="+16"/>
         <source>Alt+A</source>
         <translation>Alt+A</translation>
     </message>
@@ -4373,7 +4373,7 @@ Note:  Since the fee is calculated on a per-byte basis, a fee rate of &quot;100 
     </message>
     <message>
         <location line="+7"/>
-        <source>The fee will be deducted from the amount being sent. The recipient will receive less bitcoins than you enter in the amount field. If multiple recipients are selected, the fee is split equally.</source>
+        <source>The fee will be deducted from the amount being sent. The recipient will receive less Sugarchain coins than you enter in the amount field. If multiple recipients are selected, the fee is split equally.</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
@@ -4392,14 +4392,14 @@ Note:  Since the fee is calculated on a per-byte basis, a fee rate of &quot;100 
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location line="-51"/>
-        <location line="+3"/>
-        <source>Enter a label for this address to add it to the list of used addresses</source>
+        <location line="+10"/>
+        <source>A message that was attached to the bitcoin: URI which will be stored with the transaction for your reference. Note: This message will not be sent over the Sugarchain network.</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location line="+58"/>
-        <source>A message that was attached to the bitcoin: URI which will be stored with the transaction for your reference. Note: This message will not be sent over the Bitcoin network.</source>
+        <location line="-61"/>
+        <location line="+3"/>
+        <source>Enter a label for this address to add it to the list of used addresses</source>
         <translation type="unfinished"></translation>
     </message>
 </context>
@@ -4442,13 +4442,8 @@ Note:  Since the fee is calculated on a per-byte basis, a fee rate of &quot;100 
         <translation>&amp;Sign Message</translation>
     </message>
     <message>
-        <location line="+6"/>
-        <source>You can sign messages/agreements with your legacy (P2PKH) addresses to prove you can receive bitcoins sent to them. Be careful not to sign anything vague or random, as phishing attacks may try to trick you into signing your identity over to them. Only sign fully-detailed statements you agree to.</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location line="+18"/>
-        <source>The Bitcoin address to sign the message with</source>
+        <location line="+24"/>
+        <source>The Sugarchain address to sign the message with</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
@@ -4491,16 +4486,31 @@ Note:  Since the fee is calculated on a per-byte basis, a fee rate of &quot;100 
     </message>
     <message>
         <location line="+21"/>
-        <source>Sign the message to prove you own this Bitcoin address</source>
-        <translation>Sign the message to prove you own this Bitcoin address</translation>
+        <source>Sign the message to prove you own this Sugarchain address</source>
+        <translation type="unfinished"></translation>
     </message>
     <message>
-        <location line="+3"/>
+        <location line="+106"/>
+        <source>The Sugarchain address the message was signed with</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+51"/>
+        <source>Verify the message to ensure it was signed with the specified Sugarchain address</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="-154"/>
         <source>Sign &amp;Message</source>
         <translation>Sign &amp;Message</translation>
     </message>
     <message>
-        <location line="+14"/>
+        <location line="-131"/>
+        <source>You can sign messages/agreements with your legacy (P2PKH) addresses to prove you can receive Sugarchain coins sent to them. Be careful not to sign anything vague or random, as phishing attacks may try to trick you into signing your identity over to them. Only sign fully-detailed statements you agree to.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+145"/>
         <source>Reset all sign message fields</source>
         <translation>Reset all sign message fields</translation>
     </message>
@@ -4521,12 +4531,7 @@ Note:  Since the fee is calculated on a per-byte basis, a fee rate of &quot;100 
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location line="+21"/>
-        <source>The Bitcoin address the message was signed with</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location line="+29"/>
+        <location line="+50"/>
         <location line="+3"/>
         <source>The signed message to verify</source>
         <translation type="unfinished"></translation>
@@ -4538,12 +4543,7 @@ Note:  Since the fee is calculated on a per-byte basis, a fee rate of &quot;100 
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location line="+9"/>
-        <source>Verify the message to ensure it was signed with the specified Bitcoin address</source>
-        <translation>Verify the message to ensure it was signed with the specified Bitcoin address</translation>
-    </message>
-    <message>
-        <location line="+3"/>
+        <location line="+12"/>
         <source>Verify &amp;Message</source>
         <translation>Verify &amp;Message</translation>
     </message>
@@ -5451,12 +5451,7 @@ Go to File &gt; Open Wallet to load a wallet.
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location line="+2"/>
-        <source>Error: Dumpfile version is not supported. This version of bitcoin-wallet only supports version 1 dumpfiles. Got dumpfile with version %s</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location line="+16"/>
+        <location line="+18"/>
         <source>Error: Unable to produce descriptors for this legacy wallet. Make sure to provide the wallet&apos;s passphrase if it is encrypted.</source>
         <translation type="unfinished"></translation>
     </message>
@@ -6217,7 +6212,12 @@ Unable to restore backup of wallet.</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location line="+89"/>
+        <location line="+28"/>
+        <source>Error: Dumpfile version is not supported. This version of sugarchain-wallet only supports version 1 dumpfiles. Got dumpfile with version %s</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+61"/>
         <source>Invalid amount for -%s=&lt;amount&gt;: &apos;%s&apos;</source>
         <translation type="unfinished"></translation>
     </message>

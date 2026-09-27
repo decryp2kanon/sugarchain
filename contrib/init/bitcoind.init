@@ -5,7 +5,7 @@
 #
 # chkconfig: 345 80 20
 # description: bitcoind
-# processname: bitcoind
+# processname: sugarchaind
 #
 
 # Source function library.
@@ -22,8 +22,8 @@ prog=bitcoind
 # you can override the lockfile via BITCOIND_LOCKFILE in /etc/sysconfig/bitcoind
 lockfile=${BITCOIND_LOCKFILE-/var/lock/subsys/bitcoind}
 
-# bitcoind defaults to /usr/bin/bitcoind, override with BITCOIND_BIN
-bitcoind=${BITCOIND_BIN-/usr/bin/bitcoind}
+# bitcoind defaults to /usr/bin/sugarchaind, override with BITCOIND_BIN
+bitcoind=${BITCOIND_BIN-/usr/bin/sugarchaind}
 
 # bitcoind opts default to -disablewallet, override with BITCOIND_OPTS
 bitcoind_opts=${BITCOIND_OPTS--disablewallet}
@@ -39,7 +39,7 @@ start() {
 
 stop() {
     echo -n $"Stopping $prog: "
-    killproc $prog -t600
+    killproc $bitcoind -t600
     RETVAL=$?
     echo
     [ $RETVAL -eq 0 ] && rm -f $lockfile
@@ -54,7 +54,7 @@ case "$1" in
         stop
         ;;
     status)
-        status $prog
+        status $bitcoind
         ;;
     restart)
         stop

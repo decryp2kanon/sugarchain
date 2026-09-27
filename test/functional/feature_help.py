@@ -40,6 +40,8 @@ class HelpTest(BitcoinTestFramework):
         # Node should exit immediately and output help to stdout.
         output, _ = self.get_node_output(ret_code_expected=0)
         assert b'Options' in output
+        assert b'Sugarchain Komorebi' in output
+        assert b'Usage: sugarchaind' in output
         self.log.info(f"Help text received: {output[0:60]} (...)")
 
         self.log.info("Start bitcoin with -version for version information")
@@ -47,10 +49,12 @@ class HelpTest(BitcoinTestFramework):
         # Node should exit immediately and output version to stdout.
         output, _ = self.get_node_output(ret_code_expected=0)
         assert b'version' in output
+        assert output.startswith(b'Sugarchain Komorebi')
+        assert b'The Bitcoin Core developers' in output
         self.log.info(f"Version text received: {output[0:60]} (...)")
 
         # Test that arguments not in the help results in an error
-        self.log.info("Start bitcoind with -fakearg to make sure it does not start")
+        self.log.info("Start sugarchaind with -fakearg to make sure it does not start")
         self.nodes[0].start(extra_args=['-fakearg'])
         # Node should exit immediately and output an error to stderr
         _, output = self.get_node_output(ret_code_expected=1)

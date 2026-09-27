@@ -1,4 +1,4 @@
-Sample init scripts and service configuration for bitcoind
+Sample init scripts and service configuration for sugarchaind
 ==========================================================
 
 Sample scripts and configuration files for systemd, Upstart and OpenRC
@@ -15,22 +15,22 @@ Service User
 
 All three Linux startup configurations assume the existence of a "bitcoin" user
 and group.  They must be created before attempting to use these scripts.
-The macOS configuration assumes bitcoind will be set up for the current user.
+The macOS configuration assumes sugarchaind will be set up for the current user.
 
 Configuration
 ---------------------------------
 
-Running bitcoind as a daemon does not require any manual configuration. You may
+Running sugarchaind as a daemon does not require any manual configuration. You may
 set the `rpcauth` setting in the `bitcoin.conf` configuration file to override
 the default behaviour of using a special cookie for authentication.
 
 This password does not have to be remembered or typed as it is mostly used
-as a fixed token that bitcoind and client programs read from the configuration
+as a fixed token that sugarchaind and client programs read from the configuration
 file, however it is recommended that a strong and secure password be used
 as this password is security critical to securing the wallet should the
 wallet be enabled.
 
-If bitcoind is run with the "-server" flag (set by default), and no rpcpassword is set,
+If sugarchaind is run with the "-server" flag (set by default), and no rpcpassword is set,
 it will use a special cookie file for authentication. The cookie is generated with random
 content when the daemon starts, and deleted when it exits. Read access to this file
 controls who can access it through RPC.
@@ -40,7 +40,7 @@ overridden with the option `-rpccookiefile`. Default file permissions for the
 cookie are "owner" (i.e. user read/writeable) via default application-wide file
 umask of `0077`, but these can be overridden with the `-rpccookieperms` option.
 
-This allows for running bitcoind without having to do any manual configuration.
+This allows for running sugarchaind without having to do any manual configuration.
 
 `conf`, `pid`, and `wallet` accept relative paths which are interpreted as
 relative to the data directory. `wallet` *only* supports relative paths.
@@ -55,7 +55,7 @@ Paths
 
 All three configurations assume several paths that might need to be adjusted.
 
-    Binary:              /usr/bin/bitcoind
+    Binary:              /usr/bin/sugarchaind
     Configuration file:  /etc/bitcoin/bitcoin.conf
     Data directory:      /var/lib/bitcoind
     PID file:            /var/run/bitcoind/bitcoind.pid (OpenRC and Upstart) or
@@ -65,7 +65,7 @@ All three configurations assume several paths that might need to be adjusted.
 The PID directory (if applicable) and data directory should both be owned by the
 bitcoin user and group. It is advised for security reasons to make the
 configuration file and data directory only readable by the bitcoin user and
-group. Access to bitcoin-cli and other bitcoind rpc clients can then be
+group. Access to sugarchain-cli and other sugarchaind rpc clients can then be
 controlled by group membership.
 
 NOTE: When using the systemd .service file, the creation of the aforementioned
@@ -86,7 +86,7 @@ OpenRC).
 
 ### macOS
 
-    Binary:              /usr/local/bin/bitcoind
+    Binary:              /usr/local/bin/sugarchaind
     Configuration file:  ~/Library/Application Support/Bitcoin/bitcoin.conf
     Data directory:      ~/Library/Application Support/Bitcoin
     Lock file:           ~/Library/Application Support/Bitcoin/.lock
@@ -126,7 +126,7 @@ use old versions of Upstart and do not supply the start-stop-daemon utility.
 
 Copy bitcoind.init to /etc/init.d/bitcoind. Test by running `service bitcoind start`.
 
-Using this script, you can adjust the path and flags to the bitcoind program by
+Using this script, you can adjust the path and flags to the sugarchaind program by
 setting the BITCOIND and FLAGS environment variables in the file
 /etc/sysconfig/bitcoind. You can also use the DAEMONOPTS environment variable here.
 
@@ -135,9 +135,9 @@ setting the BITCOIND and FLAGS environment variables in the file
 Copy org.bitcoin.bitcoind.plist into ~/Library/LaunchAgents. Load the launch agent by
 running `launchctl load ~/Library/LaunchAgents/org.bitcoin.bitcoind.plist`.
 
-This Launch Agent will cause bitcoind to start whenever the user logs in.
+This Launch Agent will cause sugarchaind to start whenever the user logs in.
 
-NOTE: This approach is intended for those wanting to run bitcoind as the current user.
+NOTE: This approach is intended for those wanting to run sugarchaind as the current user.
 You will need to modify org.bitcoin.bitcoind.plist if you intend to use it as a
 Launch Daemon with a dedicated bitcoin user.
 

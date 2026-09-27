@@ -195,7 +195,7 @@ void DebugMessageHandler(QtMsgType type, const QMessageLogContext& context, cons
 }
 
 static int qt_argc = 1;
-static const char* qt_argv = "bitcoin-qt";
+static const char* qt_argv = "sugarchain-qt";
 
 BitcoinApplication::BitcoinApplication()
     : QApplication(qt_argc, const_cast<char**>(&qt_argv))
@@ -538,10 +538,10 @@ int GuiMain(int argc, char* argv[])
             return EXIT_FAILURE;
         }
         if (invalid_token) {
-            InitError(Untranslated(strprintf("Command line contains unexpected token '%s', see bitcoin-qt -h for a list of options.", argv[i])));
+            InitError(Untranslated(strprintf("Command line contains unexpected token '%s', see sugarchain-qt -h for a list of options.", argv[i])));
             QMessageBox::critical(nullptr, CLIENT_NAME,
                                   // message cannot be translated because translations have not been initialized
-                                  QString::fromStdString("Command line contains unexpected token '%1', see bitcoin-qt -h for a list of options.").arg(QString::fromStdString(argv[i])));
+                                  QString::fromStdString("Command line contains unexpected token '%1', see sugarchain-qt -h for a list of options.").arg(QString::fromStdString(argv[i])));
             return EXIT_FAILURE;
         }
     }
@@ -555,6 +555,7 @@ int GuiMain(int argc, char* argv[])
     QApplication::setOrganizationName(QAPP_ORG_NAME);
     QApplication::setOrganizationDomain(QAPP_ORG_DOMAIN);
     QApplication::setApplicationName(QAPP_APP_NAME_DEFAULT);
+    QApplication::setApplicationDisplayName(CLIENT_NAME);
 
     /// 4. Initialization of translations, so that intro dialog is in user's language
     // Now that QSettings are accessible, initialize translations

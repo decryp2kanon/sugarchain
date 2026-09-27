@@ -1,10 +1,10 @@
 # `bitcoin.conf` Configuration File
 
-The configuration file is used by `bitcoind`, `bitcoin-qt` and `bitcoin-cli`.
+The configuration file is used by `sugarchaind`, `sugarchain-qt` and `sugarchain-cli`.
 
 All command-line options (except for `-?`, `-help`, `-version` and `-conf`) may be specified in a configuration file, and all configuration file options (except for `includeconf`) may also be specified on the command line. Command-line options override values set in the configuration file and configuration file options override values set in the GUI.
 
-Changes to the configuration file while `bitcoind` or `bitcoin-qt` is running only take effect after restarting.
+Changes to the configuration file while `sugarchaind` or `sugarchain-qt` is running only take effect after restarting.
 
 Users should never make any configuration changes which they do not understand. Furthermore, users should always be wary of accepting any configuration changes provided to them by another source (even if they believe that they do understand them).
 
@@ -12,7 +12,7 @@ Users should never make any configuration changes which they do not understand. 
 
 Options specified in the configuration file can be overridden by options in the [`settings.json` file](files.md) and by options specified on the command line.
 
-The `settings.json` file contains dynamic settings that are set by the Bitcoin Core GUI and RPCs at runtime, and augment or replace the static settings specified in the `bitcoin.conf` file.
+The `settings.json` file contains dynamic settings that are set by the Sugarchain Komorebi GUI and RPCs at runtime, and augment or replace the static settings specified in the `bitcoin.conf` file.
 
 Command line options also augment or replace `bitcoin.conf` options, and can be useful for scripting and debugging.
 

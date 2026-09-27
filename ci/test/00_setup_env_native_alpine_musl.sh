@@ -18,4 +18,4 @@ export BITCOIN_CONFIG="\
  -DCMAKE_BUILD_TYPE=Debug \
 "
 export TEST_RUNNER_EXTRA="--v2transport --usecli --extended"
-export BITCOIN_CMD="bitcoin -m" # Used in functional tests
+export BITCOIN_CMD="sugarchain -m" # Used in functional tests
